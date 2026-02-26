@@ -78,7 +78,8 @@
                     <thead>
                         <tr>
                             {% for field_name, field_label in fields.items %}
-                                <th>
+                                {% with col_width=field_widths|get_item:field_name %}
+                                <th{% if col_width %} style="width: {{ col_width }}%"{% endif %}>
                                     <button type="button"
                                     hx-get="."
                                     hx-vals='{"sort_by": "{{ field_name }}", "sort_dir": "{% if request.GET.sort_by == field_name and request.GET.sort_dir == "asc" %}desc{% else %}asc{% endif %}"}'
@@ -94,6 +95,7 @@
                                         {% endif %}
                                     </button>
                                 </th>
+                                {% endwith %}
                             {% endfor %}
                             <th>Actions</th>
                         </tr>
@@ -102,7 +104,9 @@
                         {% for item in object_data %}
                             <tr>
                                 {% for field_name, verbose_name, value in item.fields %}
-                                    <td>{{ value }}</td>
+                                    {% with col_width=field_widths|get_item:field_name %}
+                                    <td{% if col_width %} style="width: {{ col_width }}%"{% endif %}>{{ value }}</td>
+                                    {% endwith %}
                                 {% endfor %}
                                 <td class="min-w-40 max-w-40">
                                     <a href="{% url url_namespace|add:model_name|add:'-detail' item.object.pk %}?{{ request.GET.urlencode }}" class="btn btn-sm btn-ghost">View</a>

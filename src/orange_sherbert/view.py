@@ -44,6 +44,7 @@ class _CRUDMixin:
     url_namespace = None
     inline_formsets = []
     parent_view = None
+    field_widths = {}
 
     def get_formsets(self):
         formsets = {}
@@ -355,6 +356,15 @@ class _CRUDMixin:
                 })
         
         url_namespace = f'{self.url_namespace}:' if self.url_namespace else ''
+
+        # Resolve field_widths into a dict keyed by field name
+        raw_widths = self.field_widths
+        if isinstance(raw_widths, (list, tuple)):
+            field_names = list(self.fields.keys()) if isinstance(self.fields, dict) else list(self.fields)
+            field_widths_map = {field_names[i]: raw_widths[i] for i in range(min(len(field_names), len(raw_widths)))}
+        else:
+            field_widths_map = raw_widths
+
         context.update({
             'model_name': meta.model_name,
             'verbose_name': meta.verbose_name,
@@ -366,6 +376,7 @@ class _CRUDMixin:
             'search_query': self.request.GET.get('search', ''),
             'extra_actions': self.extra_actions,
             'url_namespace': url_namespace,
+            'field_widths': field_widths_map,
         })
         
         if self.view_type == 'detail' and 'object' in context:
@@ -562,6 +573,7 @@ class CRUDView(View):
     property_field_map = {}
     inline_formsets = []
     field_widgets = {}  # View-level widget configuration: {'field_name': ('WidgetClass', 'css classes', {attrs})}
+    field_widths = {}   # Column width percentages for list view: {'field_name': 25} or [10, 5, 25, 35]
     view_type = None
     url_namespace = None
     url_prefix = None  # Custom URL prefix to override model name (e.g., 'admin-user' instead of 'user')
@@ -641,6 +653,7 @@ class CRUDView(View):
             'url_namespace': self.url_namespace,
             'inline_formsets': self.inline_formsets,
             'parent_view': self,
+            'field_widths': self.field_widths,
         }
         
         # Only pass fields if no custom form_class (Django doesn't allow both)

@@ -3,6 +3,14 @@ from django import template
 register = template.Library()
 
 
+@register.filter
+def get_item(dictionary, key):
+    """Get a value from a dict using a variable key. Usage: {{ my_dict|get_item:key }}"""
+    if not dictionary:
+        return None
+    return dictionary.get(key)
+
+
 @register.simple_tag
 def get_field_options(obj, field_name):
     model = obj.model
