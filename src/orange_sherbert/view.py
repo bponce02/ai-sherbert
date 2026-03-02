@@ -5,7 +5,7 @@ from django.views.generic import UpdateView
 from django.views.generic import DeleteView
 from django.views import View
 from django.urls import path, reverse
-from django.db.models import Q
+from django.db.models import Q, Model
 from django.http import HttpResponseForbidden, HttpResponse
 from django.template.loader import render_to_string
 from django.forms.models import BaseInlineFormSet
@@ -562,7 +562,7 @@ class _CRUDDeleteView(_CRUDMixin, DeleteView):
 
 
 class CRUDView(View):
-    model = None
+    model: type[Model]
     enforce_model_permissions = False
     fields = []
     form_fields = []
@@ -583,7 +583,12 @@ class CRUDView(View):
     create_template_name = 'orange_sherbert/create.html'
     update_template_name = 'orange_sherbert/update.html'
     delete_template_name = 'orange_sherbert/delete.html'
-    
+
+    def __init_subclass__(cls, abstract: bool = False, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if not abstract and not hasattr(cls, 'model'):
+            raise TypeError(f"{cls.__name__} must define a model attribute")
+
     def dispatch(self, request, *args, **kwargs):
         view_type = getattr(self, 'view_type', 'list')
         
