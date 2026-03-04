@@ -584,11 +584,6 @@ class CRUDView(View):
     update_template_name = 'orange_sherbert/update.html'
     delete_template_name = 'orange_sherbert/delete.html'
 
-    def __init_subclass__(cls, abstract: bool = False, **kwargs):
-        super().__init_subclass__(**kwargs)
-        if not abstract and not hasattr(cls, 'model'):
-            raise TypeError(f"{cls.__name__} must define a model attribute")
-
     def dispatch(self, request, *args, **kwargs):
         view_type = getattr(self, 'view_type', 'list')
         
