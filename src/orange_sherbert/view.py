@@ -453,8 +453,9 @@ class _CRUDMixin:
         url_name = f'{self.url_namespace}:{model_name}-list' if self.url_namespace else f'{model_name}-list'
         base_url = reverse(url_name)
         
-        # Preserve query parameters from the session if they exist
-        query_params = self.request.session.get('list_query_params', '')
+        # Preserve query parameters from the session if they exist (keyed by model)
+        session_key = f'list_query_params_{model_name}'
+        query_params = self.request.session.get(session_key, '')
         if query_params:
             return f'{base_url}?{query_params}'
         return base_url
@@ -470,7 +471,8 @@ class _CRUDMixin:
             referer = request.META.get('HTTP_REFERER', '')
             if referer and '?' in referer:
                 query_string = referer.split('?', 1)[1]
-                request.session['list_query_params'] = query_string
+                session_key = f'list_query_params_{self.model._meta.model_name}'
+                request.session[session_key] = query_string
         
         if self.inline_formsets:
             self.init_formsets()
