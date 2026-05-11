@@ -1,0 +1,40 @@
+{% comment %}
+Side card shown on the book create/update/detail views.
+'object' is the Book instance (None on create view).
+{% endcomment %}
+
+<div class="card border border-base-300">
+    <div class="card-body">
+        <h3 class="card-title text-base uppercase tracking-wide text-base-content/60">Book Info</h3>
+
+        {% if object and object.pk %}
+        <div class="space-y-3 mt-2">
+            <div class="flex justify-between text-sm">
+                <span class="text-base-content/60">Price</span>
+                <span class="font-semibold">{{ object.formatted_price }}</span>
+            </div>
+            <div class="flex justify-between text-sm">
+                <span class="text-base-content/60">Status</span>
+                {% if object.checked_out %}
+                <span class="badge badge-warning badge-sm">Checked Out</span>
+                {% else %}
+                <span class="badge badge-success badge-sm">Available</span>
+                {% endif %}
+            </div>
+            {% if object.location %}
+            <div class="flex justify-between text-sm">
+                <span class="text-base-content/60">Location</span>
+                <span>{{ object.location }}</span>
+            </div>
+            {% endif %}
+            <div class="divider my-1"></div>
+            <div class="flex justify-between text-sm">
+                <span class="text-base-content/60">Requests</span>
+                <span class="font-semibold">{{ object.requests.count }}</span>
+            </div>
+        </div>
+        {% else %}
+        <p class="text-sm text-base-content/50 mt-2">Details will appear after saving.</p>
+        {% endif %}
+    </div>
+</div>

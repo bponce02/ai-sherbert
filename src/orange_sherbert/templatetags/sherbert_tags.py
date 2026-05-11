@@ -11,6 +11,12 @@ def get_item(dictionary, key):
     return dictionary.get(key)
 
 
+@register.filter
+def get_attr(obj, attr):
+    """Get an attribute from an object using a variable name. Usage: {{ obj|get_attr:attr_name }}"""
+    return getattr(obj, attr, '')
+
+
 @register.simple_tag
 def get_field_options(obj, field_name):
     model = obj.model

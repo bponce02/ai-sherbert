@@ -51,11 +51,10 @@ class _CRUDMixin:
 
         if self.inline_formsets:
             for config in self.inline_formsets:
-                # Use custom prefix if provided, otherwise use model name
                 name = config.get('prefix', config['model']._meta.model_name)
                 parent_model = config.get('nested_under') or self.model
                 parent_name = config['nested_under']._meta.model_name if config.get('nested_under') else None
-                
+
                 formset = nestedinlineformset_factory(
                     parent_model,
                     config['model'],
@@ -68,12 +67,118 @@ class _CRUDMixin:
                 formsets[name] = formset
 
         return formsets
-    
+
+    def _get_sequential_config(self, formset_name):
+        return next(
+            (c for c in (self.inline_formsets or [])
+             if c.get('prefix', c['model']._meta.model_name) == formset_name
+             and c.get('mode') == 'sequential'),
+            None
+        )
+
+    def _get_sequential_display_fields(self, config):
+        model = config['model']
+        fields = config.get('fields', '__all__')
+
+        if fields == '__all__':
+            parent_fk_names = {
+                f.name for f in model._meta.fields
+                if f.is_relation and f.related_model == self.model
+            }
+            fields = [
+                f.name for f in model._meta.fields
+                if not f.primary_key and f.name not in parent_fk_names
+            ]
+
+        display_fields = []
+        for field_name in fields:
+            try:
+                verbose = model._meta.get_field(field_name).verbose_name
+            except Exception:
+                verbose = field_name.replace('_', ' ')
+            display_fields.append((str(verbose).capitalize(), field_name))
+
+        return display_fields
+
+    def _attach_sequential_meta(self, formset_instance, name, config):
+        formset_instance.sequential_mode = True
+        formset_instance.verbose_name_singular = config['model']._meta.verbose_name
+        formset_instance.sequential_display_fields = self._get_sequential_display_fields(config)
+        add_form = formset_instance.empty_form
+        add_form.prefix = f'{name}-0'
+        self._apply_widget_styling_to_form(add_form)
+        formset_instance.sequential_add_form = add_form
+
+    def _render_sequential_formset(self, request, config, formset_name, FormSetClass, error_formset=None):
+        fresh_formset = FormSetClass(instance=self.object, prefix=formset_name)
+        fresh_formset.model_name = formset_name
+        fresh_formset.verbose_name = config['model']._meta.verbose_name_plural
+        self._attach_sequential_meta(fresh_formset, formset_name, config)
+
+        if error_formset is not None:
+            bound_add_form = error_formset.forms[0] if error_formset.forms else fresh_formset.sequential_add_form
+            self._apply_widget_styling_to_form(bound_add_form)
+            fresh_formset.sequential_add_form = bound_add_form
+
+        html = render_to_string(
+            'orange_sherbert/includes/formset_sequential.html',
+            {'formset': fresh_formset, 'object': self.object},
+            request=request,
+        )
+        return HttpResponse(html)
+
+    def _handle_sequential_save(self, request):
+        formset_name = request.POST.get('formset_name')
+        self.object = self.get_object()
+
+        config = self._get_sequential_config(formset_name)
+        if not config:
+            return HttpResponse(f"Sequential formset '{formset_name}' not found", status=400)
+
+        FormSetClass = nestedinlineformset_factory(
+            self.model,
+            config['model'],
+            parent_formset_name=None,
+            queryset_filter=config.get('queryset_filter'),
+            fields=config.get('fields', '__all__'),
+            extra=1,
+            can_delete=False,
+        )
+
+        bound = FormSetClass(request.POST, instance=self.object, prefix=formset_name)
+        if bound.is_valid():
+            bound.save()
+            return self._render_sequential_formset(request, config, formset_name, FormSetClass)
+        return self._render_sequential_formset(request, config, formset_name, FormSetClass, error_formset=bound)
+
+    def _handle_sequential_delete(self, request):
+        formset_name = request.POST.get('formset_name')
+        item_pk = request.POST.get('item_pk')
+        self.object = self.get_object()
+
+        config = self._get_sequential_config(formset_name)
+        if not config:
+            return HttpResponse(f"Sequential formset '{formset_name}' not found", status=400)
+
+        config['model'].objects.filter(pk=item_pk).delete()
+
+        FormSetClass = nestedinlineformset_factory(
+            self.model,
+            config['model'],
+            parent_formset_name=None,
+            queryset_filter=config.get('queryset_filter'),
+            fields=config.get('fields', '__all__'),
+            extra=1,
+            can_delete=False,
+        )
+        return self._render_sequential_formset(request, config, formset_name, FormSetClass)
+
     def init_formsets(self):
         self.formset_instances = {}
         self.all_formsets_by_prefix = {}
         formsets = self.get_formsets()
-        
+        config_map = {c.get('prefix', c['model']._meta.model_name): c for c in (self.inline_formsets or [])}
+
         for name, FormSetClass in formsets.items():
             if FormSetClass.parent_formset_name is None:
                 formset_instance = FormSetClass(
@@ -82,16 +187,25 @@ class _CRUDMixin:
                 )
                 formset_instance.model_name = name
                 formset_instance.verbose_name = FormSetClass.model._meta.verbose_name_plural
-                for form in formset_instance.forms:
-                    form.children = []
-                    self._apply_widget_styling_to_form(form)
+
+                config = config_map.get(name, {})
+                if config.get('mode') == 'sequential':
+                    self._attach_sequential_meta(formset_instance, name, config)
+                else:
+                    formset_instance.sequential_mode = False
+                    for form in formset_instance.forms:
+                        form.children = []
+                        self._apply_widget_styling_to_form(form)
+
                 self.formset_instances[name] = formset_instance
                 self.all_formsets_by_prefix[name] = formset_instance
-        
+
         for name, FormSetClass in formsets.items():
             parent_name = FormSetClass.parent_formset_name
             if parent_name and parent_name in self.formset_instances:
                 parent_formset = self.formset_instances[parent_name]
+                if getattr(parent_formset, 'sequential_mode', False):
+                    continue
                 for i, parent_form in enumerate(parent_formset.forms):
                     prefix = f'{parent_name}-{i}-{name}'
                     child_formset = FormSetClass(
@@ -110,9 +224,24 @@ class _CRUDMixin:
     def bind_formsets(self, request):
         self.formset_instances = {}
         formsets = self.get_formsets()
-        
+        config_map = {c.get('prefix', c['model']._meta.model_name): c for c in (self.inline_formsets or [])}
+
         for name, FormSetClass in formsets.items():
             if FormSetClass.parent_formset_name is None:
+                config = config_map.get(name, {})
+
+                if config.get('mode') == 'sequential':
+                    # Not bound to main form POST — initialize unbound for display
+                    formset_instance = FormSetClass(
+                        instance=getattr(self, 'object', None),
+                        prefix=name,
+                    )
+                    formset_instance.model_name = name
+                    formset_instance.verbose_name = FormSetClass.model._meta.verbose_name_plural
+                    self._attach_sequential_meta(formset_instance, name, config)
+                    self.formset_instances[name] = formset_instance
+                    continue
+
                 formset_instance = FormSetClass(
                     request.POST,
                     request.FILES,
@@ -120,15 +249,18 @@ class _CRUDMixin:
                     prefix=name,
                 )
                 formset_instance.verbose_name = FormSetClass.model._meta.verbose_name_plural
+                formset_instance.sequential_mode = False
                 for form in formset_instance.forms:
                     form.children = []
                     self._apply_widget_styling_to_form(form)
                 self.formset_instances[name] = formset_instance
-        
+
         for name, FormSetClass in formsets.items():
             parent_name = FormSetClass.parent_formset_name
             if parent_name and parent_name in self.formset_instances:
                 parent_formset = self.formset_instances[parent_name]
+                if getattr(parent_formset, 'sequential_mode', False):
+                    continue
                 for i, parent_form in enumerate(parent_formset.forms):
                     child_formset = FormSetClass(
                         request.POST,
@@ -149,11 +281,11 @@ class _CRUDMixin:
 
         formset_instance = FormSetClass(prefix=prefix)
         empty_form = formset_instance.empty_form
-        
+
         empty_form.prefix = f'{prefix}-{form_index}'
         empty_form.children = []
         self._apply_widget_styling_to_form(empty_form)
-        
+
         for name, ChildFormSetClass in formsets.items():
             if ChildFormSetClass.parent_formset_name == formset_class_name:
                 child_prefix = f'{prefix}-{form_index}-{name}'
@@ -166,7 +298,7 @@ class _CRUDMixin:
                 for form in child_formset.forms:
                     form.children = []
                 empty_form.children.append(child_formset)
-        
+
         return empty_form
 
     def are_formsets_valid(self):
@@ -174,58 +306,48 @@ class _CRUDMixin:
         stack = list(self.formset_instances.values())
         while stack:
             formset = stack.pop()
+            if getattr(formset, 'sequential_mode', False):
+                continue
             valid = formset.is_valid() and valid
             for form in formset.forms:
                 if hasattr(form, 'children'):
                     stack.extend(form.children)
         return valid
-    
+
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
-        # Call parent_view's get_form_kwargs if it exists
         if self.parent_view and hasattr(self.parent_view, 'get_form_kwargs'):
-            # Set request on parent_view so it can access self.request
             self.parent_view.request = self.request
             parent_kwargs = self.parent_view.get_form_kwargs()
             kwargs.update(parent_kwargs)
         return kwargs
-    
+
     def _apply_widget_styling_to_form(self, form):
-        """Apply global and view-level widget styling to a form (including inline formset forms)"""
         from django import forms as django_forms
         from django.conf import settings
         from orange_sherbert.defaults import DEFAULT_FIELD_WIDGETS
         from orange_sherbert import widgets as orange_widgets
-        
-        # Get global widget configuration (field-type-based)
+
         global_widgets = getattr(settings, 'ORANGE_SHERBERT_FIELD_WIDGETS', DEFAULT_FIELD_WIDGETS)
-        
-        # Get view-level widget configuration (field-name-based)
         view_widgets = getattr(self.parent_view, 'field_widgets', {}) if self.parent_view else {}
-        
-        # Apply widget configuration
+
         for field_name, field in form.fields.items():
             widget_config = None
-            
-            # Check for field-name-based override first (most specific)
+
             if field_name in view_widgets:
                 widget_config = view_widgets[field_name]
             else:
-                # Fall back to field-type-based global config
                 field_type = field.__class__.__name__
                 if field_type in global_widgets:
                     widget_config = global_widgets[field_type]
-            
-            # Apply widget configuration if found
+
             if widget_config:
                 widget_class_name, css_classes, extra_attrs = widget_config
-                
-                # Get the widget class - try orange_sherbert widgets first, then django.forms
+
                 widget_class = getattr(orange_widgets, widget_class_name, None)
                 if not widget_class:
                     widget_class = getattr(django_forms, widget_class_name, None)
-                
-                # If still not found, try importing as a fully qualified path
+
                 if not widget_class and '.' in widget_class_name:
                     try:
                         from importlib import import_module
@@ -234,21 +356,15 @@ class _CRUDMixin:
                         widget_class = getattr(module, class_name, None)
                     except (ImportError, AttributeError, ValueError):
                         pass
-                
+
                 if widget_class:
-                    # Build widget attributes (remove 'type' from attrs since it's set by widget class)
                     attrs = {'class': css_classes}
                     attrs.update({k: v for k, v in extra_attrs.items() if k != 'type'})
-                    
-                    # Only replace widget if it's still the default
-                    # This preserves custom widgets defined in form classes
+
                     current_widget = field.widget.__class__.__name__
                     current_widget_class = field.widget.__class__
-                    
-                    # Check if current widget matches the configured widget class
-                    # If so, just merge CSS classes instead of replacing
+
                     if current_widget_class == widget_class:
-                        # Same widget class - just merge CSS classes
                         existing_classes = field.widget.attrs.get('class', '')
                         if existing_classes:
                             existing_set = set(existing_classes.split())
@@ -257,45 +373,36 @@ class _CRUDMixin:
                             field.widget.attrs['class'] = ' '.join(sorted(combined))
                         else:
                             field.widget.attrs['class'] = css_classes
-                    elif current_widget in ('TextInput', 'Textarea', 'Select', 'SelectMultiple', 'NumberInput', 
+                    elif current_widget in ('TextInput', 'Textarea', 'Select', 'SelectMultiple', 'NumberInput',
                                          'DateInput', 'TimeInput', 'DateTimeInput', 'CheckboxInput'):
-                        # For Select/SelectMultiple/CheckboxInput, preserve functionality by just updating attrs
                         if current_widget in ('Select', 'SelectMultiple', 'CheckboxInput'):
-                            # Just update the attrs on the existing widget instead of replacing it
                             field.widget.attrs.update(attrs)
                         else:
-                            # For other widgets, safe to replace
                             field.widget = widget_class(attrs=attrs)
                     else:
-                        # Widget was explicitly set (custom widget), merge CSS classes
                         existing_classes = field.widget.attrs.get('class', '')
                         if existing_classes:
-                            # Merge with existing classes, avoiding duplicates
                             existing_set = set(existing_classes.split())
                             new_set = set(css_classes.split())
                             combined = existing_set | new_set
                             field.widget.attrs['class'] = ' '.join(sorted(combined))
                         else:
-                            # No existing classes, just add ours
                             field.widget.attrs['class'] = css_classes
-    
+
     def get_form(self, form_class=None):
         form = super().get_form(form_class)
-        
-        # Apply widget styling to the main form
         self._apply_widget_styling_to_form(form)
-        
-        # Call parent_view's get_form if it exists
         if self.parent_view and hasattr(self.parent_view, 'get_form'):
             form = self.parent_view.get_form(form, self.request)
-        
         return form
 
     def save_formsets(self):
         for formset in self.formset_instances.values():
+            if getattr(formset, 'sequential_mode', False):
+                continue
             formset.instance = self.object
-        
-        stack = list(self.formset_instances.values())
+
+        stack = [f for f in self.formset_instances.values() if not getattr(f, 'sequential_mode', False)]
         while stack:
             formset = stack.pop(0)
             formset.save()
@@ -304,14 +411,13 @@ class _CRUDMixin:
                     for child in form.children:
                         child.instance = form.instance
                         stack.append(child)
-    
+
     def get_queryset(self, **kwargs):
         queryset = super().get_queryset()
-        
-        # Call parent_view's get_queryset if it exists
+
         if self.parent_view and hasattr(self.parent_view, 'get_queryset'):
             queryset = self.parent_view.get_queryset(queryset, self.request)
-        
+
         filter_fields = self.filter_fields
         if filter_fields:
             for field in filter_fields:
@@ -319,7 +425,7 @@ class _CRUDMixin:
                 field_value = self.request.GET.get(field_name)
                 if field_value:
                     queryset = queryset.filter(**{field_name: field_value})
-        
+
         search_query = self.request.GET.get('search', '').strip()
         search_fields = self.search_fields
         if search_query and search_fields:
@@ -327,7 +433,7 @@ class _CRUDMixin:
             for field in search_fields:
                 q_objects |= Q(**{f'{field}__icontains': search_query})
             queryset = queryset.filter(q_objects)
-        
+
         sort_by = self.request.GET.get('sort_by')
         sort_dir = self.request.GET.get('sort_dir', 'asc')
         if sort_by:
@@ -335,9 +441,9 @@ class _CRUDMixin:
             db_field = property_field_map.get(sort_by, sort_by)
             order_field = f'-{db_field}' if sort_dir == 'desc' else db_field
             queryset = queryset.order_by(order_field)
-        
+
         return queryset
-        
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         meta = self.model._meta
@@ -349,15 +455,14 @@ class _CRUDMixin:
                 for field_name, verbose_name in self.fields.items():
                     value = getattr(obj, field_name, '')
                     field_tuples.append((field_name, verbose_name, value))
-                
+
                 object_data.append({
                     'object': obj,
                     'fields': field_tuples,
                 })
-        
+
         url_namespace = f'{self.url_namespace}:' if self.url_namespace else ''
 
-        # Resolve field_widths into a dict keyed by field name
         raw_widths = self.field_widths
         if isinstance(raw_widths, (list, tuple)):
             field_names = list(self.fields.keys()) if isinstance(self.fields, dict) else list(self.fields)
@@ -377,8 +482,16 @@ class _CRUDMixin:
             'extra_actions': self.extra_actions,
             'url_namespace': url_namespace,
             'field_widths': field_widths_map,
+            'view_type': self.view_type,
+            'side_cards_template': getattr(self.parent_view, 'side_cards_template', None)
+                if self.view_type != 'create' or getattr(self.parent_view, 'side_cards_on_create', True)
+                else None,
+            'top_cards_template': getattr(self.parent_view, 'top_cards_template', None)
+                if self.view_type != 'create' or getattr(self.parent_view, 'top_cards_on_create', True)
+                else None,
+            'show_sequential': self.view_type != 'create' or getattr(self.parent_view, 'sequential_on_create', False),
         })
-        
+
         if self.view_type == 'detail' and 'object' in context:
             obj = context['object']
             detail_fields = []
@@ -386,37 +499,31 @@ class _CRUDMixin:
                 value = getattr(obj, field_name, '')
                 detail_fields.append((field_name, verbose_name, value))
             context['detail_fields'] = detail_fields
-            
-            # Add related items from inline formsets for detail view
+
             if self.inline_formsets:
                 related_items = []
                 for config in self.inline_formsets:
-                    # Only show top-level formsets (not nested ones)
                     if not config.get('nested_under'):
                         model = config['model']
                         prefix = config.get('prefix', model._meta.model_name)
-                        
-                        # Get the foreign key field that relates to the parent model
+
                         fk_field = None
                         for field in model._meta.fields:
                             if field.related_model == self.model:
                                 fk_field = field.name
                                 break
-                        
+
                         if fk_field:
-                            # Fetch related objects with queryset filter if provided
                             filter_kwargs = {fk_field: obj}
                             queryset_filter = config.get('queryset_filter', {})
                             if queryset_filter:
                                 filter_kwargs.update(queryset_filter)
                             related_objs = model.objects.filter(**filter_kwargs)
-                            
-                            # Get fields to display
+
                             display_fields = config.get('fields', '__all__')
                             if display_fields == '__all__':
                                 display_fields = [f.name for f in model._meta.fields if not f.primary_key and f.name != fk_field]
-                            
-                            # Build data structure for template
+
                             items_data = []
                             for related_obj in related_objs:
                                 item_fields = []
@@ -428,32 +535,31 @@ class _CRUDMixin:
                                     'object': related_obj,
                                     'fields': item_fields,
                                 })
-                            
+
                             related_items.append({
                                 'prefix': prefix,
                                 'verbose_name': model._meta.verbose_name,
                                 'verbose_name_plural': model._meta.verbose_name_plural,
                                 'items': items_data,
                             })
-                
+
                 context['related_items'] = related_items
-        
+
         if self.view_type in ('create', 'update') and self.inline_formsets:
             if not hasattr(self, 'formset_instances'):
                 self.init_formsets()
             context['formsets'] = self.formset_instances
-        
+
         if self.parent_view and hasattr(self.parent_view, 'get_context_data'):
             context = self.parent_view.get_context_data(context, self.request)
-        
+
         return context
-    
+
     def get_success_url(self):
         model_name = self.model._meta.model_name
         url_name = f'{self.url_namespace}:{model_name}-list' if self.url_namespace else f'{model_name}-list'
         base_url = reverse(url_name)
-        
-        # Preserve query parameters from the session if they exist (keyed by model)
+
         session_key = f'list_query_params_{model_name}'
         query_params = self.request.session.get(session_key, '')
         if query_params:
@@ -465,15 +571,14 @@ class _CRUDMixin:
             self.object = None
         elif self.view_type == 'update':
             self.object = self.get_object()
-        
-        # Store query parameters from referrer for create/update/delete views
+
         if self.view_type in ('create', 'update', 'delete'):
             referer = request.META.get('HTTP_REFERER', '')
             if referer and '?' in referer:
                 query_string = referer.split('?', 1)[1]
                 session_key = f'list_query_params_{self.model._meta.model_name}'
                 request.session[session_key] = query_string
-        
+
         if self.inline_formsets:
             self.init_formsets()
         return super().get(request, *args, **kwargs)
@@ -483,15 +588,19 @@ class _CRUDMixin:
             self.object = None
         elif self.view_type in ('update', 'delete'):
             self.object = self.get_object()
-        
-        # For delete views, skip form handling and let DeleteView handle it
+
         if self.view_type == 'delete':
             return super().post(request, *args, **kwargs)
-        
+
         if self.inline_formsets:
             self.init_formsets()
-        
+
         if request.htmx:
+            if request.POST.get('formset_sequential_save'):
+                return self._handle_sequential_save(request)
+            if request.POST.get('formset_sequential_delete'):
+                return self._handle_sequential_delete(request)
+
             formset_class = request.POST.get('formset_class')
             prefix = request.POST.get('prefix')
             form_index = int(request.POST.get('form_index', 0))
@@ -517,20 +626,17 @@ class _CRUDMixin:
         return self.form_invalid(form)
 
     def form_valid(self, form):
-        # Call parent_view's form_valid before save if it exists
         if self.parent_view and hasattr(self.parent_view, 'form_valid'):
             self.parent_view.form_valid(form)
-        
-        # Only save form if it has a save method (delete forms don't)
+
         if hasattr(form, 'save'):
             self.object = form.save()
             if self.inline_formsets:
                 self.save_formsets()
-            
-            # Call parent_view's post_save if it exists (for M2M relations, etc.)
+
             if self.parent_view and hasattr(self.parent_view, 'post_save'):
                 self.parent_view.post_save(self.object, self.request)
-        
+
         return super().form_valid(form)
 
 class _CRUDListView(_CRUDMixin, ListView):
@@ -547,19 +653,15 @@ class _CRUDUpdateView(_CRUDMixin, UpdateView):
 
 class _CRUDDeleteView(_CRUDMixin, DeleteView):
     template_name = 'orange_sherbert/delete.html'
-    
+
     def get_context_data(self, **kwargs):
-        # Ensure self.object is set before calling parent's get_context_data
         if not hasattr(self, 'object') or not self.object:
             self.object = self.get_object()
         return super().get_context_data(**kwargs)
-    
+
     def form_valid(self, form):
-        # Set self.object before calling parent's form_valid
-        # DeleteView needs this to delete the object
         if not hasattr(self, 'object') or not self.object:
             self.object = self.get_object()
-        # Call the actual delete logic from DeleteView
         return DeleteView.form_valid(self, form)
 
 
@@ -574,21 +676,26 @@ class CRUDView(View):
     search_fields = []
     property_field_map = {}
     inline_formsets = []
-    field_widgets = {}  # View-level widget configuration: {'field_name': ('WidgetClass', 'css classes', {attrs})}
-    field_widths = {}   # Column width percentages for list view: {'field_name': 25} or [10, 5, 25, 35]
+    field_widgets = {}
+    field_widths = {}
     view_type = None
     url_namespace = None
-    url_prefix = None  # Custom URL prefix to override model name (e.g., 'admin-user' instead of 'user')
-    path_converter = 'int'  # 'int', 'uuid', 'slug', etc.
+    url_prefix = None
+    path_converter = 'int'
     list_template_name = 'orange_sherbert/list.html'
     detail_template_name = 'orange_sherbert/detail.html'
     create_template_name = 'orange_sherbert/create.html'
     update_template_name = 'orange_sherbert/update.html'
     delete_template_name = 'orange_sherbert/delete.html'
+    side_cards_template = None
+    top_cards_template = None
+    side_cards_on_create = True
+    top_cards_on_create = True
+    sequential_on_create = False
 
     def dispatch(self, request, *args, **kwargs):
         view_type = getattr(self, 'view_type', 'list')
-        
+
         permission_map = {
             'list': 'view',
             'detail': 'view',
@@ -609,27 +716,24 @@ class CRUDView(View):
         app_label = self.model._meta.app_label
         model_name = self.model._meta.model_name
         permission = f'{app_label}.{action}_{model_name}'
-        
-        # Create instance-level copies of fields to avoid mutating class-level attributes
+
         if self.fields == '__all__':
             instance_fields = {f.name: f.verbose_name for f in self.model._meta.fields if not f.primary_key}
         else:
             instance_fields = self.fields.copy() if isinstance(self.fields, dict) else self.fields
-        
+
         instance_form_fields = self.form_fields.copy() if isinstance(self.form_fields, dict) else self.form_fields
-        
-        # Filter out restricted fields based on user permissions
+
         if self.restricted_fields:
             for field, required_permission in self.restricted_fields.items():
                 if field in instance_fields and not request.user.has_perm(required_permission):
                     del instance_fields[field]
                 if instance_form_fields and field in instance_form_fields and not request.user.has_perm(required_permission):
                     del instance_form_fields[field]
- 
+
         if self.enforce_model_permissions and not request.user.has_perm(permission):
             return HttpResponseForbidden("You do not have permission to perform this action.")
-        
-        # For create/update views, replace properties with their underlying model fields
+
         form_fields = instance_form_fields if instance_form_fields else instance_fields
         if view_type in ('create', 'update') and self.property_field_map:
             resolved_form_fields = {}
@@ -640,10 +744,9 @@ class CRUDView(View):
                 else:
                     resolved_form_fields[k] = v
             form_fields = resolved_form_fields
-        
-        # Check if custom form_class is defined
+
         has_custom_form = hasattr(self, 'form_class') and self.form_class is not None
-        
+
         view_kwargs = {
             'model': self.model,
             'filter_fields': self.filter_fields,
@@ -657,9 +760,7 @@ class CRUDView(View):
             'parent_view': self,
             'field_widths': self.field_widths,
         }
-        
-        # Only pass fields if no custom form_class (Django doesn't allow both)
-        # form_class only applies to create/update views
+
         if has_custom_form and view_type in ('create', 'update'):
             view_kwargs['form_class'] = self.form_class
         else:
@@ -675,27 +776,25 @@ class CRUDView(View):
             view_kwargs['template_name'] = self.update_template_name
         elif view_type == 'delete':
             view_kwargs['template_name'] = self.delete_template_name
-        
+
         view = view_class.as_view(**view_kwargs)
         return view(request, *args, **kwargs)
-    
+
     @classmethod
     def get_model_name(cls):
         if cls.model is None:
             raise ValueError("model attribute must be set")
         return cls.model._meta.model_name
-    
+
     @classmethod
     def get_urls(cls):
         model_name = cls.get_model_name()
-        
-        # Use url_prefix if set, otherwise use model_name
+
         url_base = cls.url_prefix if cls.url_prefix else model_name
-        # Use url_prefix for URL names too if set, otherwise use model_name
         name_base = cls.url_prefix if cls.url_prefix else model_name
 
         pk_type = cls.path_converter
-        
+
         urls = [
             path(f'{url_base}/', cls.as_view(view_type='list'), name=f'{name_base}-list'),
             path(f'{url_base}/create/', cls.as_view(view_type='create'), name=f'{name_base}-create'),
@@ -703,14 +802,14 @@ class CRUDView(View):
             path(f'{url_base}/<{pk_type}:pk>/update/', cls.as_view(view_type='update'), name=f'{name_base}-update'),
             path(f'{url_base}/<{pk_type}:pk>/delete/', cls.as_view(view_type='delete'), name=f'{name_base}-delete'),
         ]
-        
+
         if cls.extra_actions:
             for action in cls.extra_actions:
                 action_name = action['name']
                 view_class = action['view']
-                
+
                 url_name = f"{name_base}-{action_name}"
                 url_path = f'{url_base}/<{pk_type}:pk>/{action_name}/'
                 urls.append(path(url_path, view_class.as_view(), name=url_name))
-        
+
         return urls

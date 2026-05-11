@@ -4,52 +4,89 @@
 
 {% block content %}
 <div class="container mx-auto">
-    <div class="card">
-        <div class="card-body">
-            <h1 class="card-title text-2xl mb-4">Update {{ object }}</h1>
-            
-            <form method="post" enctype="multipart/form-data" class="space-y-4">
-                {% csrf_token %}
-                {{ form.media }}
-                {% for field in form %}
-                <div class="form-control">
-                    <label class="label">
-                        <span class="label-text font-semibold">{{ field.label }}</span>
-                    </label>
-                    {{ field }}
-                    {% if field.errors %}
-                        <label class="label">
-                            <span class="label-text-alt text-error">{{ field.errors.0 }}</span>
-                        </label>
-                    {% endif %}
-                    {% if field.help_text %}
-                        <label class="label">
-                            <span class="label-text-alt">{{ field.help_text }}</span>
-                        </label>
-                    {% endif %}
+
+    {% if top_cards_template %}
+    {% include top_cards_template %}
+    {% endif %}
+
+    <div class="{% if side_cards_template %}grid grid-cols-3 gap-6{% endif %}">
+
+        {# ── Main column ──────────────────────────────────────────── #}
+        <div class="{% if side_cards_template %}col-span-2 {% endif %}space-y-4">
+
+            <div class="card">
+                <div class="card-body">
+                    <h1 class="card-title text-2xl mb-4">Update {{ object }}</h1>
+
+                    <form method="post" enctype="multipart/form-data" class="space-y-4">
+                        {% csrf_token %}
+                        {{ form.media }}
+                        {% for field in form %}
+                        <div class="form-control">
+                            <label class="label">
+                                <span class="label-text font-semibold">{{ field.label }}</span>
+                            </label>
+                            {{ field }}
+                            {% if field.errors %}
+                            <label class="label">
+                                <span class="label-text-alt text-error">{{ field.errors.0 }}</span>
+                            </label>
+                            {% endif %}
+                            {% if field.help_text %}
+                            <label class="label">
+                                <span class="label-text-alt">{{ field.help_text }}</span>
+                            </label>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+
+                        {% if form.non_field_errors %}
+                        <div class="alert alert-error">
+                            {{ form.non_field_errors }}
+                        </div>
+                        {% endif %}
+
+                        {% if formsets %}
+                        <div class="divider">Related Items</div>
+                        {% for name, formset in formsets.items %}
+                        {% if not formset.sequential_mode %}
+                        <h3 class="font-semibold text-lg mb-2">{{ formset.verbose_name }}</h3>
+                        {% include "orange_sherbert/includes/formset.html" with formset=formset %}
+                        {% endif %}
+                        {% endfor %}
+                        {% endif %}
+
+                        <div class="card-actions justify-end gap-2 mt-6">
+                            <a href="{% url url_namespace|add:model_name|add:'-list' %}?{{ request.GET.urlencode }}" class="btn btn-ghost">Cancel</a>
+                            <button type="submit" class="btn btn-primary">Update</button>
+                        </div>
+                    </form>
                 </div>
-                {% endfor %}
-                
-                {% if form.non_field_errors %}
-                <div class="alert alert-error">
-                    {{ form.non_field_errors }}
+            </div>
+
+            {# Sequential formsets — outside the main form #}
+            {% if formsets %}
+            {% for name, formset in formsets.items %}
+            {% if formset.sequential_mode %}
+            <div class="card">
+                <div class="card-body">
+                    <h3 class="card-title text-lg mb-2">{{ formset.verbose_name }}</h3>
+                    {% include "orange_sherbert/includes/formset_sequential.html" with formset=formset %}
                 </div>
-                {% endif %}
-                
-                {% if formsets %}
-                <div class="divider">Related Items</div>
-                {% for name, formset in formsets.items %}
-                    <h3 class="font-semibold text-lg mb-2">{{ formset.verbose_name }}</h3>
-                    {% include "orange_sherbert/includes/formset.html" with formset=formset %}
-                {% endfor %}
-                {% endif %}
-                
-                <div class="card-actions justify-end gap-2 mt-6">
-                    <a href="{% url url_namespace|add:model_name|add:'-list' %}?{{ request.GET.urlencode }}" class="btn btn-ghost">Cancel</a>
-                    <button type="submit" class="btn btn-primary">Update</button>
-                </div>
-            </form>
+            </div>
+            {% endif %}
+            {% endfor %}
+            {% endif %}
+
         </div>
+
+        {# ── Side cards ───────────────────────────────────────────── #}
+        {% if side_cards_template %}
+        <div>
+            {% include side_cards_template %}
+        </div>
+        {% endif %}
+
     </div>
 </div>
 {% endblock %}

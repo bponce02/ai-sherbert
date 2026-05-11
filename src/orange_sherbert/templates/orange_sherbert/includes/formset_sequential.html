@@ -1,0 +1,122 @@
+{% comment %}
+Sequential inline formset: list of saved items at top, single add form below.
+The entire div is the HTMX swap target so both sections refresh together.
+
+Usage: {% include "orange_sherbert/includes/formset_sequential.html" with formset=formset %}
+
+Requires on formset:
+  - sequential_mode = True
+  - sequential_add_form   — styled empty form with prefix "{name}-0"
+  - sequential_display_fields — [(verbose_name, field_name), ...]
+  - verbose_name_singular — e.g. "Book Request"
+  - verbose_name          — used as plural label (set to verbose_name_plural by the view)
+  - queryset              — existing related objects
+{% endcomment %}
+{% load sherbert_tags %}
+
+<div id="seq-{{ formset.prefix }}">
+
+    {# ── Existing items list ───────────────────────────────────────── #}
+    {% if formset.queryset.exists %}
+    <div class="overflow-x-auto mb-4">
+        <table class="table">
+            <thead>
+                <tr>
+                    {% for verbose_name, field_name in formset.sequential_display_fields %}
+                    <th>{{ verbose_name }}</th>
+                    {% endfor %}
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in formset.queryset %}
+                <tr>
+                    {% for verbose_name, field_name in formset.sequential_display_fields %}
+                    <td>{{ item|get_attr:field_name }}</td>
+                    {% endfor %}
+                    <td class="text-right">
+                        <button type="button"
+                            hx-post=""
+                            hx-vals='{"formset_sequential_delete": "1", "formset_name": "{{ formset.prefix }}", "item_pk": "{{ item.pk }}"}'
+                            hx-target="#seq-{{ formset.prefix }}"
+                            hx-swap="outerHTML"
+                            class="btn btn-xs btn-ghost text-error">
+                            ✕
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="flex flex-col items-center justify-center py-10 mb-4 bg-base-200 rounded-lg text-center">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 mb-3 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+        </svg>
+        <p class="text-base-content/60 text-sm">No {{ formset.verbose_name|lower }} yet.</p>
+        {% if object and object.pk %}
+        <p class="text-base-content/40 text-xs mt-1">Add your first {{ formset.verbose_name_singular|lower }} using the form below.</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {# ── Add form ──────────────────────────────────────────────────── #}
+    {% if object and object.pk %}
+    {% with form=formset.sequential_add_form %}
+    <div class="border border-base-300 rounded-lg p-4">
+        <h4 class="font-semibold mb-4">New {{ formset.verbose_name_singular }}</h4>
+        <form hx-post=""
+              hx-target="#seq-{{ formset.prefix }}"
+              hx-swap="outerHTML">
+            {% csrf_token %}
+            <input type="hidden" name="formset_sequential_save" value="1">
+            <input type="hidden" name="formset_name" value="{{ formset.prefix }}">
+            <input type="hidden" name="{{ formset.prefix }}-TOTAL_FORMS" value="1">
+            <input type="hidden" name="{{ formset.prefix }}-INITIAL_FORMS" value="0">
+            <input type="hidden" name="{{ formset.prefix }}-MIN_NUM_FORMS" value="0">
+            <input type="hidden" name="{{ formset.prefix }}-MAX_NUM_FORMS" value="1000">
+
+            <div class="grid grid-cols-2 gap-4">
+                {% for field in form %}
+                {% if not field.is_hidden %}
+                <div class="form-control {% if field.field.widget.attrs.rows %}col-span-2{% endif %}">
+                    <label class="label">
+                        <span class="label-text font-semibold">{{ field.label }}</span>
+                        {% if field.field.required %}<span class="label-text-alt text-error">*</span>{% endif %}
+                    </label>
+                    {{ field }}
+                    {% if field.errors %}
+                    <label class="label">
+                        <span class="label-text-alt text-error">{{ field.errors.0 }}</span>
+                    </label>
+                    {% endif %}
+                    {% if field.help_text %}
+                    <label class="label">
+                        <span class="label-text-alt">{{ field.help_text }}</span>
+                    </label>
+                    {% endif %}
+                </div>
+                {% else %}
+                {{ field }}
+                {% endif %}
+                {% endfor %}
+            </div>
+
+            {% if form.non_field_errors %}
+            <div class="alert alert-error mt-3 py-2 text-sm">{{ form.non_field_errors }}</div>
+            {% endif %}
+
+            <div class="flex justify-end mt-4">
+                <button type="submit" class="btn btn-primary btn-sm">
+                    + Add {{ formset.verbose_name_singular }}
+                </button>
+            </div>
+        </form>
+    </div>
+    {% endwith %}
+    {% else %}
+    <p class="text-sm text-base-content/50 italic">Save the record first to add {{ formset.verbose_name|lower }}.</p>
+    {% endif %}
+
+</div>

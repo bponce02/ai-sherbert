@@ -7,10 +7,14 @@ requires-python = ">=3.12"
 dependencies = [
     "django>=5.0",
     "django-htmx>=1.27.0",
+    "ruff>=0.15.12",
 ]
 
 [tool.setuptools.package-data]
 orange_sherbert = ["templates/**/*.html"]
+
+[tool.mypy]
+plugins = ["mypy_django_plugin.main"]
 
 [dependency-groups]
 dev = [
@@ -18,5 +22,5 @@ dev = [
     "pytest>=8.0.0",
     "pytest-cov>=7.0.0",
     "pytest-django>=4.9.0",
-    "playwright>=1.56.0",   
+    "playwright>=1.56.0",
 ]

@@ -3,7 +3,7 @@ from django.views import View
 
 from orange_sherbert.view import CRUDView
 
-from .models import Author, Book, BookRequest, RequestComment
+from .models import Author, Book, BookRequest
 
 
 class OrderOnlineView(View):
@@ -59,15 +59,13 @@ class BookCRUDView(CRUDView):
             "model": BookRequest,
             "fields": ["requester_name", "requester_email"],
             "can_delete": True,
-        },
-        {
-            "model": RequestComment,
-            "fields": ["comment"],
-            "nested_under": BookRequest,
-            "extra": 1,
-            "can_delete": True,
+            "mode": "sequential",  # one-at-a-time: list at top, single add form below
         },
     ]
+    side_cards_template = "example/book_side_card.html"
+    side_cards_on_create = False
+    top_cards_on_create = False
+    sequential_on_create = False
     extra_actions = [
         {
             "name": "order-online",
