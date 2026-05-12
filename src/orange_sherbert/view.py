@@ -108,6 +108,9 @@ class _CRUDMixin:
         add_form.prefix = f'{name}-0'
         self._apply_widget_styling_to_form(add_form)
         formset_instance.sequential_add_form = add_form
+        default_template = 'orange_sherbert/includes/formset_sequential.html'
+        formset_instance.sequential_template = config.get('sequential_template', default_template)
+        formset_instance.has_custom_layout = 'sequential_template' in config
 
     def _render_sequential_formset(self, request, config, formset_name, FormSetClass, error_formset=None):
         fresh_formset = FormSetClass(instance=self.object, prefix=formset_name)
@@ -120,11 +123,14 @@ class _CRUDMixin:
             self._apply_widget_styling_to_form(bound_add_form)
             fresh_formset.sequential_add_form = bound_add_form
 
-        html = render_to_string(
-            'orange_sherbert/includes/formset_sequential.html',
-            {'formset': fresh_formset, 'object': self.object},
-            request=request,
-        )
+        template = fresh_formset.sequential_template
+        extra_context = {}
+        if self.parent_view and hasattr(self.parent_view, 'get_sequential_context'):
+            extra_context = self.parent_view.get_sequential_context(formset_name, request) or {}
+
+        context = {'formset': fresh_formset, 'object': self.object}
+        context.update(extra_context)
+        html = render_to_string(template, context, request=request)
         return HttpResponse(html)
 
     def _handle_sequential_save(self, request):
@@ -556,6 +562,16 @@ class _CRUDMixin:
         return context
 
     def get_success_url(self):
+        if (
+            self.view_type == 'create'
+            and self.parent_view
+            and hasattr(self.parent_view, 'get_post_create_url')
+            and getattr(self, 'object', None)
+        ):
+            url = self.parent_view.get_post_create_url(self.object)
+            if url:
+                return url
+
         model_name = self.model._meta.model_name
         url_name = f'{self.url_namespace}:{model_name}-list' if self.url_namespace else f'{model_name}-list'
         base_url = reverse(url_name)

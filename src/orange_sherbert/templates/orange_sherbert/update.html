@@ -68,12 +68,16 @@
             {% if formsets %}
             {% for name, formset in formsets.items %}
             {% if formset.sequential_mode %}
+            {% if formset.has_custom_layout %}
+            {% include formset.sequential_template with formset=formset %}
+            {% else %}
             <div class="card">
                 <div class="card-body">
                     <h3 class="card-title text-lg mb-2">{{ formset.verbose_name }}</h3>
-                    {% include "orange_sherbert/includes/formset_sequential.html" with formset=formset %}
+                    {% include formset.sequential_template with formset=formset %}
                 </div>
             </div>
+            {% endif %}
             {% endif %}
             {% endfor %}
             {% endif %}
