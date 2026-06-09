@@ -53,6 +53,8 @@ class BookCRUDView(CRUDView):
     restricted_fields = {"ordered_from": "can_view_ordered_from"}
     property_field_map = {"formatted_price": "price"}
     field_widths = [20, 10, 10, 5, 5, 5]
+    # Per-field cell CSS: only the listed fields get extra classes on their <td>.
+    cell_css = {"price": "text-right font-bold", "checked_out": "text-center"}
 
     inline_formsets = [
         {

@@ -104,8 +104,8 @@
                         {% for item in object_data %}
                             <tr>
                                 {% for field_name, verbose_name, value in item.fields %}
-                                    {% with col_width=field_widths|get_item:field_name %}
-                                    <td{% if col_width %} style="width: {{ col_width }}%"{% endif %}>{{ value }}</td>
+                                    {% with col_width=field_widths|get_item:field_name cell_class=cell_css|get_item:field_name %}
+                                    <td{% if cell_class %} class="{{ cell_class }}"{% endif %}{% if col_width %} style="width: {{ col_width }}%"{% endif %}>{{ value }}</td>
                                     {% endwith %}
                                 {% endfor %}
                                 <td class="min-w-40 max-w-40">

@@ -45,6 +45,7 @@ class _CRUDMixin:
     inline_formsets = []
     parent_view = None
     field_widths = {}
+    cell_css = {}
 
     def get_formsets(self):
         formsets = {}
@@ -450,6 +451,14 @@ class _CRUDMixin:
 
         return queryset
 
+    def _map_to_fields(self, raw):
+        """Normalize a per-field config (dict or positional list/tuple) into a
+        {field_name: value} dict keyed by the list view's display fields."""
+        if isinstance(raw, (list, tuple)):
+            field_names = list(self.fields.keys()) if isinstance(self.fields, dict) else list(self.fields)
+            return {field_names[i]: raw[i] for i in range(min(len(field_names), len(raw)))}
+        return raw or {}
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         meta = self.model._meta
@@ -469,12 +478,8 @@ class _CRUDMixin:
 
         url_namespace = f'{self.url_namespace}:' if self.url_namespace else ''
 
-        raw_widths = self.field_widths
-        if isinstance(raw_widths, (list, tuple)):
-            field_names = list(self.fields.keys()) if isinstance(self.fields, dict) else list(self.fields)
-            field_widths_map = {field_names[i]: raw_widths[i] for i in range(min(len(field_names), len(raw_widths)))}
-        else:
-            field_widths_map = raw_widths
+        field_widths_map = self._map_to_fields(self.field_widths)
+        cell_css_map = self._map_to_fields(self.cell_css)
 
         context.update({
             'model_name': meta.model_name,
@@ -488,6 +493,7 @@ class _CRUDMixin:
             'extra_actions': self.extra_actions,
             'url_namespace': url_namespace,
             'field_widths': field_widths_map,
+            'cell_css': cell_css_map,
             'view_type': self.view_type,
             'side_cards_template': getattr(self.parent_view, 'side_cards_template', None)
                 if self.view_type != 'create' or getattr(self.parent_view, 'side_cards_on_create', True)
