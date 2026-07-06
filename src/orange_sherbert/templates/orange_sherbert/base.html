@@ -8,6 +8,20 @@
     <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     {% htmx_script %}
+    <style>
+        /* form_layout grid — plain CSS (not Tailwind classes) so host
+           Tailwind builds can't purge a dynamically-numbered grid-cols-N */
+        .sherbert-form-grid {
+            display: grid;
+            gap: 1rem;
+            grid-template-columns: minmax(0, 1fr);
+        }
+        @media (min-width: 768px) {
+            .sherbert-form-grid {
+                grid-template-columns: repeat(var(--sherbert-form-cols, 1), minmax(0, 1fr));
+            }
+        }
+    </style>
 </head>
 <body hx-headers='{"x-csrftoken": "{{ csrf_token }}"}'>
     {% block content %}{% endblock %}

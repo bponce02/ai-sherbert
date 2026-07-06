@@ -47,6 +47,7 @@ class _CRUDMixin:
     parent_view = None
     field_widths = {}
     cell_css = {}
+    form_layout = None
 
     def get_formsets(self):
         formsets = {}
@@ -474,6 +475,44 @@ class _CRUDMixin:
             return {field_names[i]: raw[i] for i in range(min(len(field_names), len(raw)))}
         return raw or {}
 
+    def _build_form_columns(self, form):
+        """Resolve form_layout (a list of field-name lists, one per column)
+        into columns of bound fields, plus any visible form fields not
+        mentioned in the layout (rendered full-width below the columns).
+
+        Names absent from the form but valid on the model or declared in
+        form_fields are skipped silently — they were removed for this user
+        (restricted_fields) or this view. Unknown names raise, so typos
+        fail loudly instead of dropping a field."""
+        from django.core.exceptions import ImproperlyConfigured
+
+        declared = self.parent_view.form_fields if self.parent_view else {}
+        model_field_names = {f.name for f in self.model._meta.get_fields()}
+
+        columns = []
+        placed = set()
+        for column in self.form_layout:
+            bound_column = []
+            for name in column:
+                name = self.property_field_map.get(name, name)
+                if name in form.fields:
+                    placed.add(name)
+                    bound_column.append(form[name])
+                elif name in model_field_names or name in declared:
+                    continue
+                else:
+                    raise ImproperlyConfigured(
+                        f"form_layout references unknown field '{name}' "
+                        f"for {self.model._meta.label}"
+                    )
+            columns.append(bound_column)
+
+        leftover = [
+            form[name] for name in form.fields
+            if name not in placed and not form[name].is_hidden
+        ]
+        return columns, leftover
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         meta = self.model._meta
@@ -572,6 +611,11 @@ class _CRUDMixin:
                             })
 
                 context['related_items'] = related_items
+
+        if self.view_type in ('create', 'update') and self.form_layout and context.get('form'):
+            columns, leftover = self._build_form_columns(context['form'])
+            context['form_columns'] = columns
+            context['form_leftover_fields'] = leftover
 
         if self.view_type in ('create', 'update') and self.inline_formsets:
             if not hasattr(self, 'formset_instances'):
@@ -721,6 +765,7 @@ class CRUDView(View):
     field_widgets = {}
     field_widths = {}
     cell_css = {}
+    form_layout = None
     view_type = None
     url_namespace = None
     url_prefix = None
@@ -803,6 +848,7 @@ class CRUDView(View):
             'parent_view': self,
             'field_widths': self.field_widths,
             'cell_css': self.cell_css,
+            'form_layout': self.form_layout,
         }
 
         if has_custom_form and view_type in ('create', 'update'):

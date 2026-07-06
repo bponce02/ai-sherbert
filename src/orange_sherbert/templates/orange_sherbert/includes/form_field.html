@@ -1,0 +1,16 @@
+<div class="form-control">
+    <label class="label">
+        <span class="label-text font-semibold">{{ field.label }}</span>
+    </label>
+    {{ field }}
+    {% if field.errors %}
+    <label class="label">
+        <span class="label-text-alt text-error">{{ field.errors.0 }}</span>
+    </label>
+    {% endif %}
+    {% if field.help_text %}
+    <label class="label">
+        <span class="label-text-alt">{{ field.help_text }}</span>
+    </label>
+    {% endif %}
+</div>

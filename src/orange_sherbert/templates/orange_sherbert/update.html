@@ -21,24 +21,25 @@
                     <form method="post" enctype="multipart/form-data" class="space-y-4">
                         {% csrf_token %}
                         {{ form.media }}
-                        {% for field in form %}
-                        <div class="form-control">
-                            <label class="label">
-                                <span class="label-text font-semibold">{{ field.label }}</span>
-                            </label>
-                            {{ field }}
-                            {% if field.errors %}
-                            <label class="label">
-                                <span class="label-text-alt text-error">{{ field.errors.0 }}</span>
-                            </label>
-                            {% endif %}
-                            {% if field.help_text %}
-                            <label class="label">
-                                <span class="label-text-alt">{{ field.help_text }}</span>
-                            </label>
-                            {% endif %}
+                        {% if form_columns %}
+                        <div class="sherbert-form-grid" style="--sherbert-form-cols: {{ form_columns|length }};">
+                            {% for column in form_columns %}
+                            <div class="space-y-4">
+                                {% for field in column %}
+                                {% include "orange_sherbert/includes/form_field.html" %}
+                                {% endfor %}
+                            </div>
+                            {% endfor %}
                         </div>
+                        {% for field in form_leftover_fields %}
+                        {% include "orange_sherbert/includes/form_field.html" %}
                         {% endfor %}
+                        {% for field in form.hidden_fields %}{{ field }}{% endfor %}
+                        {% else %}
+                        {% for field in form %}
+                        {% include "orange_sherbert/includes/form_field.html" %}
+                        {% endfor %}
+                        {% endif %}
 
                         {% if form.non_field_errors %}
                         <div class="alert alert-error">

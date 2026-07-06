@@ -52,6 +52,12 @@ class BookCRUDView(CRUDView):
     search_fields = ["title", "isbn"]
     restricted_fields = {"ordered_from": "can_view_ordered_from"}
     property_field_map = {"formatted_price": "price"}
+    # Each inner list is a column on the create/update form.
+    form_layout = [
+        ["title", "author", "isbn"],
+        ["price", "pub_date", "location"],
+        ["checked_out", "ordered_from"],
+    ]
     field_widths = [20, 10, 10, 5, 5, 5]
     # Per-field cell CSS: only the listed fields get extra classes on their <td>.
     cell_css = {"price": "text-right font-bold", "checked_out": "text-center"}
