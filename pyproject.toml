@@ -9,13 +9,19 @@ dependencies = [
     "django-htmx>=1.27.0",
 ]
 
+[project.optional-dependencies]
+pdf = [
+    "pymupdf>=1.26",
+    "django-ninja>=1.5",
+]
+
 [build-system]
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["orange_sherbert*"]
+include = ["orange_sherbert*", "sherbert_pdf*"]
 
 [tool.setuptools.package-data]
 orange_sherbert = ["templates/**/*.html"]
@@ -36,4 +42,6 @@ dev = [
     "ruff>=0.15.12",
     "mypy",
     "django-stubs",
+    "pymupdf>=1.26",
+    "django-ninja>=1.5",
 ]

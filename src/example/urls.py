@@ -16,10 +16,18 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
+from ninja import NinjaAPI
+
+from sherbert_pdf.api import router as sherbert_pdf_router
+
 from .views import BookCRUDView, AuthorCRUDView
+
+api = NinjaAPI()
+api.add_router('', sherbert_pdf_router)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/', api.urls),
     *BookCRUDView.get_urls(),
     *AuthorCRUDView.get_urls(),
 ]
