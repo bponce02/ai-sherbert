@@ -1,4 +1,5 @@
 from django import template
+from django.core.exceptions import FieldDoesNotExist
 
 register = template.Library()
 
@@ -68,7 +69,7 @@ def get_verbose_name(obj, field_name):
     try:
         field = model._meta.get_field(field_name)
         return field.verbose_name
-    except:
+    except FieldDoesNotExist:
         return field_name.replace('_', ' ').title()
 
 

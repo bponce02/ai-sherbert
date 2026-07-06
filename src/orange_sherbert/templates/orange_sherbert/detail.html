@@ -66,7 +66,7 @@
                     {% endif %}
 
                     <div class="card-actions justify-end gap-2">
-                        <a href="{% url url_namespace|add:model_name|add:'-list' %}" class="btn btn-ghost">Back to List</a>
+                        <a href="{% url url_namespace|add:model_name|add:'-list' %}?{{ list_query_params }}" class="btn btn-ghost">Back to List</a>
                         <a href="{% url url_namespace|add:model_name|add:'-update' object.pk %}" class="btn btn-primary">Edit</a>
                         <a href="{% url url_namespace|add:model_name|add:'-delete' object.pk %}" class="btn btn-error">Delete</a>
                     </div>

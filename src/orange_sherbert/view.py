@@ -5,6 +5,7 @@ from django.views.generic import UpdateView
 from django.views.generic import DeleteView
 from django.views import View
 from django.urls import path, reverse
+from django.db import transaction
 from django.db.models import Q, Model
 from django.http import HttpResponseForbidden, HttpResponse
 from django.template.loader import render_to_string
@@ -167,7 +168,21 @@ class _CRUDMixin:
         if not config:
             return HttpResponse(f"Sequential formset '{formset_name}' not found", status=400)
 
-        config['model'].objects.filter(pk=item_pk).delete()
+        fk_field = None
+        for field in config['model']._meta.fields:
+            if field.related_model == self.model:
+                fk_field = field.name
+                break
+
+        if not fk_field:
+            return HttpResponse(
+                f"Cannot determine relation between '{formset_name}' and parent model",
+                status=400,
+            )
+
+        filter_kwargs = {'pk': item_pk, fk_field: self.object}
+        filter_kwargs.update(config.get('queryset_filter', {}) or {})
+        config['model'].objects.filter(**filter_kwargs).delete()
 
         FormSetClass = nestedinlineformset_factory(
             self.model,
@@ -428,7 +443,7 @@ class _CRUDMixin:
         filter_fields = self.filter_fields
         if filter_fields:
             for field in filter_fields:
-                field_name = field if isinstance(filter_fields, list) else field
+                field_name = field
                 field_value = self.request.GET.get(field_name)
                 if field_value:
                     queryset = queryset.filter(**{field_name: field_value})
@@ -490,6 +505,7 @@ class _CRUDMixin:
             'filter_fields': self.filter_fields,
             'search_fields': self.search_fields,
             'search_query': self.request.GET.get('search', ''),
+            'list_query_params': self.request.session.get(f'list_query_params_{meta.model_name}', ''),
             'extra_actions': self.extra_actions,
             'url_namespace': url_namespace,
             'field_widths': field_widths_map,
@@ -594,7 +610,7 @@ class _CRUDMixin:
         elif self.view_type == 'update':
             self.object = self.get_object()
 
-        if self.view_type in ('create', 'update', 'delete'):
+        if self.view_type in ('create', 'update', 'delete', 'detail'):
             referer = request.META.get('HTTP_REFERER', '')
             if referer and '?' in referer:
                 query_string = referer.split('?', 1)[1]
@@ -625,7 +641,10 @@ class _CRUDMixin:
 
             formset_class = request.POST.get('formset_class')
             prefix = request.POST.get('prefix')
-            form_index = int(request.POST.get('form_index', 0))
+            try:
+                form_index = int(request.POST.get('form_index', 0))
+            except (TypeError, ValueError):
+                return HttpResponse("Invalid form_index", status=400)
             form = self.add_formset(formset_class, prefix, form_index)
             if form:
                 html = render_to_string(
@@ -652,12 +671,13 @@ class _CRUDMixin:
             self.parent_view.form_valid(form)
 
         if hasattr(form, 'save'):
-            self.object = form.save()
-            if self.inline_formsets:
-                self.save_formsets()
+            with transaction.atomic():
+                self.object = form.save()
+                if self.inline_formsets:
+                    self.save_formsets()
 
-            if self.parent_view and hasattr(self.parent_view, 'post_save'):
-                self.parent_view.post_save(self.object, self.request)
+                if self.parent_view and hasattr(self.parent_view, 'post_save'):
+                    self.parent_view.post_save(self.object, self.request)
 
         return super().form_valid(form)
 
@@ -691,15 +711,16 @@ class CRUDView(View):
     model: type[Model]
     enforce_model_permissions = False
     fields = []
-    form_fields = []
+    form_fields = {}
     extra_actions = []
-    restricted_fields = []
+    restricted_fields = {}
     filter_fields = {}
     search_fields = []
     property_field_map = {}
     inline_formsets = []
     field_widgets = {}
     field_widths = {}
+    cell_css = {}
     view_type = None
     url_namespace = None
     url_prefix = None
@@ -781,6 +802,7 @@ class CRUDView(View):
             'inline_formsets': self.inline_formsets,
             'parent_view': self,
             'field_widths': self.field_widths,
+            'cell_css': self.cell_css,
         }
 
         if has_custom_form and view_type in ('create', 'update'):

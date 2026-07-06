@@ -57,7 +57,7 @@
                         {% endif %}
 
                         <div class="card-actions justify-end gap-2 mt-6">
-                            <a href="{% url url_namespace|add:model_name|add:'-list' %}?{{ request.GET.urlencode }}" class="btn btn-ghost">Cancel</a>
+                            <a href="{% url url_namespace|add:model_name|add:'-list' %}?{{ list_query_params }}" class="btn btn-ghost">Cancel</a>
                             <button type="submit" class="btn btn-primary">Create</button>
                         </div>
                     </form>
