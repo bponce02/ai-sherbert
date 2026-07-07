@@ -835,6 +835,10 @@ async function deleteSelected() {
 
 function bindStageEvents(page) {
   page.stage.on('pointerdown', (e) => {
+    // A zoom gesture is in flight (CSS preview active): pointer coordinates
+    // map to raster-scaled preview space, not committed stage points, so a
+    // stray click must not draw/place anything until the gesture commits.
+    if (zoomPreview) return;
     // Ignore interactions with the transformer's anchors.
     if (e.target.getParent() instanceof Konva.Transformer) return;
 
@@ -905,10 +909,39 @@ deleteBtn.addEventListener('click', (e) => {
 });
 
 // ---------------------------------------------------------------------------
-// Zoom: ctrl+wheel and toolbar buttons; applied ONLY via stage.scale
+// Zoom — pdf.js-style two-phase model
+//
+//  Phase 1 (per wheel event, during the gesture): a pure CSS transform on
+//  #sp-pages previews the new scale. This is O(css-compositor) — zero Konva
+//  work, no canvas reallocation — so the gesture stays smooth. Content may
+//  look raster-scaled/blurry while pinching; that matches pdf.js.
+//
+//  Phase 2 (once, ~180ms after the last wheel event): clear the preview and
+//  run the committed path (setZooms) exactly once. Stage units stay PDF
+//  points and committed scaling is exclusively stage.scale; the CSS preview
+//  transform must NEVER survive commit or it corrupts pointer coordinate math.
+//
+//  Discrete entry points (toolbar ± buttons, __sherbertEditor.setZoom) commit
+//  immediately via setZooms with no preview.
 // ---------------------------------------------------------------------------
 
+const ZOOM_COMMIT_DELAY = 180;
+let zoomPreview = null; // active gesture: { pending, anchorAx, anchorAy, originX, originY }
+let zoomCommitTimer = null;
+
+/* setZooms is the single commit primitive: it applies `newZoom` via
+ * stage.scale + stage.size + batchDraw across all pages and re-anchors the
+ * scroll so the point under (anchorX, anchorY) — cursor coords relative to
+ * scrollEl's client rect — stays stationary. Callers pass the SAME anchor the
+ * preview captured at gesture start so the composed result lands correctly. */
 function setZooms(newZoom, anchorX, anchorY) {
+  // Defensive: the committed path owns stage.scale exclusively. Any lingering
+  // CSS preview transform would desync container pixels from stage points.
+  if (pagesEl.style.transform) {
+    pagesEl.style.transform = '';
+    pagesEl.style.transformOrigin = '';
+  }
+
   newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newZoom));
   if (newZoom === state.zoom) return;
 
@@ -942,17 +975,73 @@ function setZooms(newZoom, anchorX, anchorY) {
   scheduleBitmapRerender();
 }
 
+/* Phase 2: clear the preview and commit the accumulated zoom exactly once. */
+function commitZoomGesture() {
+  clearTimeout(zoomCommitTimer);
+  zoomCommitTimer = null;
+  const gesture = zoomPreview;
+  zoomPreview = null;
+  if (!gesture) return;
+
+  // Drop the CSS preview BEFORE committing; setZooms re-anchors the scroll
+  // against the same anchor the gesture captured, so the content point that
+  // was under the cursor stays under it once stage.scale takes over.
+  pagesEl.style.transform = '';
+  pagesEl.style.transformOrigin = '';
+  setZooms(gesture.pending, gesture.anchorAx, gesture.anchorAy);
+
+  // Assert the preview transform did not survive the commit.
+  if (pagesEl.style.transform) {
+    pagesEl.style.transform = '';
+    pagesEl.style.transformOrigin = '';
+  }
+}
+
+/* Phase 1: accumulate the pending zoom and preview it with a CSS transform.
+ * `ax`/`ay` are the cursor position relative to scrollEl's client rect. */
+function previewZoom(deltaY, deltaMode, ax, ay) {
+  // Proportional exponential mapping: smooth for trackpad pinch (many small
+  // pixel deltas) and responsive for notched mice. deltaMode 1 is line-based
+  // (Firefox) and needs a larger coefficient than pixels.
+  const factor = Math.exp(-deltaY * (deltaMode === 1 ? 0.03 : 0.002));
+
+  if (!zoomPreview) {
+    // First event of the gesture fixes the anchor. #sp-pages is the sole
+    // child of #sp-scroll (no scroll-container padding/border), so a cursor
+    // point (ax, ay) in the viewport maps to #sp-pages content coordinates
+    // (scrollLeft + ax, scrollTop + ay). Using that as transform-origin keeps
+    // the anchored content point stationary while the CSS scale plays.
+    zoomPreview = {
+      pending: state.zoom,
+      anchorAx: ax,
+      anchorAy: ay,
+      originX: scrollEl.scrollLeft + ax,
+      originY: scrollEl.scrollTop + ay,
+    };
+    // Transient UI would be mis-positioned relative to preview-scaled content.
+    deleteBtn.style.display = 'none';
+    if (state.overlay) closeOverlay(true);
+  }
+
+  const pending = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoomPreview.pending * factor));
+  zoomPreview.pending = pending;
+
+  pagesEl.style.transformOrigin = `${zoomPreview.originX}px ${zoomPreview.originY}px`;
+  pagesEl.style.transform = `scale(${pending / state.zoom})`;
+
+  document.getElementById('sp-zoom-label').textContent = `${Math.round(pending * 100)}%`;
+
+  clearTimeout(zoomCommitTimer);
+  zoomCommitTimer = setTimeout(commitZoomGesture, ZOOM_COMMIT_DELAY);
+}
+
 scrollEl.addEventListener(
   'wheel',
   (e) => {
     if (!e.ctrlKey) return;
     e.preventDefault();
     const rect = scrollEl.getBoundingClientRect();
-    // Proportional exponential mapping: smooth for trackpad pinch (many
-    // small pixel deltas) and responsive for notched mice. deltaMode 1 is
-    // line-based (Firefox) and needs a larger coefficient than pixels.
-    const factor = Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.03 : 0.002));
-    setZooms(state.zoom * factor, e.clientX - rect.left, e.clientY - rect.top);
+    previewZoom(e.deltaY, e.deltaMode, e.clientX - rect.left, e.clientY - rect.top);
   },
   { passive: false }
 );

@@ -200,3 +200,61 @@ def test_zoom_rerenders_bitmap_at_higher_scale(browser, client, live_server, set
     assert page.evaluate('window.__sherbertEditor.zoom()') == 3
 
     context.close()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ctrl_wheel_zoom_previews_then_commits_cleanly(browser, client, live_server, settings, tmp_path):
+    """A burst of ctrl+wheel events must preview via CSS, then commit once —
+    leaving no lingering transform and no corrupted pointer coordinates."""
+    settings.MEDIA_ROOT = tmp_path
+    owner = User.objects.create_user('wheelowner', password='pw')
+    pdf_doc = PDFDocument(title='E2E Wheel Zoom Doc', user=owner)
+    pdf_doc.file.save('e2e_wheel.pdf', ContentFile(make_pdf_bytes()), save=True)
+
+    context, page = _open_editor(browser, client, live_server, settings, pdf_doc)
+
+    assert page.evaluate('window.__sherbertEditor.zoom()') == 1
+
+    canvas = page.locator('#sp-pages canvas').first
+    box = canvas.bounding_box()
+    assert box is not None
+    cx = box['x'] + box['width'] * 0.5
+    cy = box['y'] + box['height'] * 0.5
+
+    # Fire a rapid burst of ctrl+wheel zoom-in events (negative deltaY).
+    page.mouse.move(cx, cy)
+    page.keyboard.down('Control')
+    for _ in range(8):
+        page.mouse.wheel(0, -60)
+    page.keyboard.up('Control')
+
+    # (b) Phase-2 commit is debounced (~180ms); the committed zoom changes from 1.
+    page.wait_for_function('() => window.__sherbertEditor.zoom() > 1', timeout=10000)
+
+    # (a) No CSS transform survives the commit on #sp-pages.
+    transform = page.evaluate(
+        "() => { const el = document.getElementById('sp-pages');"
+        " return [el.style.transform, getComputedStyle(el).transform]; }"
+    )
+    assert transform[0] == '', f'inline transform lingered: {transform[0]!r}'
+    assert transform[1] in ('', 'none'), f'computed transform lingered: {transform[1]!r}'
+
+    # (c) Drawing still works after the gesture — coordinates were not corrupted.
+    # The anchor point (cx, cy) is held stationary through the commit, so it is
+    # guaranteed to still be over the (now larger) page and inside the viewport.
+    page.click('[data-tool="pen"]')
+    sx = cx - 40
+    sy = cy - 20
+    with page.expect_response(
+        lambda r: '/api/annotations' in r.url and r.request.method == 'POST' and r.status == 201,
+        timeout=15000,
+    ):
+        page.mouse.move(sx, sy)
+        page.mouse.down()
+        for i in range(1, 6):
+            page.mouse.move(sx + i * 15, sy + i * 8)
+        page.mouse.up()
+
+    assert PDFAnnotation.objects.filter(annotation_type='pen').count() >= 1
+
+    context.close()
