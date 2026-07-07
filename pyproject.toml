@@ -25,6 +25,7 @@ include = ["orange_sherbert*", "sherbert_pdf*"]
 
 [tool.setuptools.package-data]
 orange_sherbert = ["templates/**/*.html"]
+sherbert_pdf = ["templates/**/*.html", "static/**/*"]
 
 [tool.mypy]
 plugins = ["mypy_django_plugin.main"]

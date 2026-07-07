@@ -1,0 +1,158 @@
+/* Sherbert PDF editor — standalone page styles. NO CSS zoom anywhere:
+   all display scaling happens through Konva stage.scale(). */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #e5e7eb;
+}
+
+#sp-toolbar {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+}
+
+#sp-title {
+  font-weight: bold;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sp-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+#sp-toolbar button,
+#sp-toolbar a {
+  appearance: none;
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
+  border-radius: 4px;
+  padding: 0.25rem 0.55rem;
+  font-size: 13px;
+  line-height: 1.2;
+  cursor: pointer;
+  color: #111827;
+  text-decoration: none;
+}
+
+#sp-toolbar button:hover:not(:disabled),
+#sp-toolbar a:hover {
+  background: #e5e7eb;
+}
+
+#sp-toolbar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+#sp-toolbar .sp-tool.sp-active {
+  background: #dbeafe;
+  border-color: #3b82f6;
+}
+
+.sp-swatches {
+  display: none;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.sp-swatches.sp-visible {
+  display: inline-flex;
+}
+
+#sp-toolbar .sp-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+}
+
+#sp-toolbar .sp-swatch.sp-active {
+  border-color: #111827;
+  outline: 2px solid #ffffff;
+  outline-offset: -4px;
+}
+
+.sp-size {
+  width: 90px;
+}
+
+#sp-zoom-label {
+  min-width: 3.2em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+#sp-scroll {
+  height: calc(100vh - 3rem);
+  overflow: auto;
+}
+
+#sp-pages {
+  padding: 1rem 0;
+}
+
+.sp-page {
+  position: relative;
+  width: fit-content;
+  margin: 0 auto 1rem auto;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+/* Floating delete button for the selected annotation */
+.sp-delete-btn {
+  position: absolute;
+  z-index: 5;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: #ef4444;
+  color: #ffffff;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: center;
+  padding: 0;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.sp-delete-btn:hover {
+  background: #dc2626;
+}
+
+/* Text editing overlay (standard Konva textarea pattern) */
+.sp-text-overlay {
+  position: absolute;
+  z-index: 6;
+  margin: 0;
+  padding: 0;
+  border: 1px dashed #3b82f6;
+  background: rgba(255, 255, 255, 0.85);
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  line-height: 1;
+  min-width: 60px;
+  min-height: 1em;
+}

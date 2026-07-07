@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sherbert PDF — Documents</title>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+</head>
+<body class="p-8">
+  <div class="container mx-auto max-w-3xl space-y-6">
+    <h1 class="text-2xl font-bold">PDF Documents</h1>
+
+    <form id="upload-form" class="flex gap-2 items-end">
+      <div class="form-control">
+        <label class="label"><span class="label-text">Title</span></label>
+        <input type="text" name="pdf_title" class="input input-bordered" placeholder="Untitled">
+      </div>
+      <div class="form-control">
+        <label class="label"><span class="label-text">PDF file</span></label>
+        <input type="file" name="pdf_file" accept="application/pdf" required class="file-input file-input-bordered">
+      </div>
+      <button type="submit" class="btn btn-primary">Upload</button>
+    </form>
+
+    <table class="table">
+      <thead><tr><th>Title</th><th>Created</th><th></th></tr></thead>
+      <tbody>
+        {% for doc in documents %}
+        <tr>
+          <td>{{ doc.title }}</td>
+          <td>{{ doc.created_at|date:"Y-m-d H:i" }}</td>
+          <td class="flex gap-2">
+            <a class="btn btn-sm btn-primary" href="{% url 'sherbert_pdf:editor' doc.pk %}">Edit</a>
+            <a class="btn btn-sm btn-ghost" href="/api/pdf-documents/{{ doc.pk }}/export">Export</a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="3">No documents yet — upload one above.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    document.getElementById('upload-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const fd = new FormData();
+      fd.append('pdf_file', form.pdf_file.files[0]);
+      const params = new URLSearchParams({ pdf_title: form.pdf_title.value || 'Untitled' });
+      const res = await fetch(`/api/pdf-documents?${params}`, { method: 'POST', body: fd });
+      if (res.ok) location.reload();
+      else alert(`Upload failed: ${res.status}`);
+    });
+  </script>
+</body>
+</html>

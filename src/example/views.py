@@ -1,9 +1,16 @@
-from django.shortcuts import redirect
+from django.shortcuts import redirect, render
 from django.views import View
 
 from orange_sherbert.view import CRUDView
+from sherbert_pdf.models import PDFDocument
 
 from .models import Author, Book, BookRequest
+
+
+def pdf_index(request):
+    """Demo page: list PDF documents with upload form and editor links."""
+    documents = PDFDocument.objects.filter(is_active=True).order_by('-created_at')
+    return render(request, 'example/pdf_index.html', {'documents': documents})
 
 
 class OrderOnlineView(View):

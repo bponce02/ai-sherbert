@@ -1,0 +1,75 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>{{ pdf.title }} — Sherbert PDF Editor</title>
+  <link rel="stylesheet" href="{% static 'sherbert_pdf/editor.css' %}">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  </script>
+  <script src="https://unpkg.com/konva@9.3.16/konva.min.js"></script>
+</head>
+<body>
+  {% csrf_token %}
+
+  <div id="sp-toolbar">
+    <span id="sp-title" title="{{ pdf.title }}">{{ pdf.title }}</span>
+
+    <span class="sp-group">
+      <button type="button" class="sp-tool" data-tool="pen" title="Pen">&#9998; Pen</button>
+      <span class="sp-swatches" data-for="pen">
+        <button type="button" class="sp-swatch sp-active" data-color="black" style="background:#000000" title="Black"></button>
+        <button type="button" class="sp-swatch" data-color="red" style="background:#EF4444" title="Red"></button>
+        <button type="button" class="sp-swatch" data-color="blue" style="background:#3B82F6" title="Blue"></button>
+        <button type="button" class="sp-swatch" data-color="green" style="background:#22C55E" title="Green"></button>
+        <input type="range" class="sp-size" data-for="pen" min="1" max="20" step="1" value="2" title="Pen size">
+      </span>
+    </span>
+
+    <span class="sp-group">
+      <button type="button" class="sp-tool" data-tool="highlighter" title="Highlighter">&#9646; Highlight</button>
+      <span class="sp-swatches" data-for="highlighter">
+        <button type="button" class="sp-swatch sp-active" data-color="yellow" style="background:#EAB308" title="Yellow"></button>
+        <button type="button" class="sp-swatch" data-color="green" style="background:#22C55E" title="Green"></button>
+        <button type="button" class="sp-swatch" data-color="orange" style="background:#F97316" title="Orange"></button>
+        <button type="button" class="sp-swatch" data-color="blue" style="background:#3B82F6" title="Blue"></button>
+        <input type="range" class="sp-size" data-for="highlighter" min="5" max="60" step="5" value="20" title="Highlighter size">
+      </span>
+    </span>
+
+    <span class="sp-group">
+      <button type="button" class="sp-tool" data-tool="text" title="Text">T Text</button>
+      <span class="sp-swatches" data-for="text">
+        <button type="button" class="sp-swatch sp-active" data-color="black" style="background:#000000" title="Black"></button>
+        <button type="button" class="sp-swatch" data-color="red" style="background:#EF4444" title="Red"></button>
+        <button type="button" class="sp-swatch" data-color="blue" style="background:#3B82F6" title="Blue"></button>
+        <input type="range" class="sp-size" data-for="text" min="8" max="72" step="2" value="14" title="Text size">
+      </span>
+    </span>
+
+    <button type="button" class="sp-tool" data-tool="select" title="Select / move">&#10548; Select</button>
+
+    <span class="sp-group">
+      <button type="button" id="sp-undo" title="Undo (Ctrl+Z)" disabled>&#8630;</button>
+      <button type="button" id="sp-redo" title="Redo (Ctrl+Shift+Z)" disabled>&#8631;</button>
+    </span>
+
+    <span class="sp-group">
+      <button type="button" id="sp-zoom-out" title="Zoom out">&minus;</button>
+      <span id="sp-zoom-label">100%</span>
+      <button type="button" id="sp-zoom-in" title="Zoom in">+</button>
+    </span>
+
+    <a id="sp-export" href="{{ api_base }}/pdf-documents/{{ pdf.id }}/export" title="Export annotated PDF">&#8681; Export</a>
+  </div>
+
+  <div id="sp-scroll">
+    <div id="sp-pages"></div>
+  </div>
+
+  {{ editor_config|json_script:"sherbert-config" }}
+  <script type="module" src="{% static 'sherbert_pdf/editor.js' %}"></script>
+</body>
+</html>
