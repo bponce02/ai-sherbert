@@ -26,7 +26,6 @@ const RENDER_SCALE = 1.5;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 4.0;
 const ZOOM_STEP = 1.25;
-const WHEEL_ZOOM_STEP = 1.1;
 
 /* Same palette (0-1 floats) as quick_edit4's getColorRgbArray(). */
 const COLORS = {
@@ -163,6 +162,7 @@ function cloudPoints(x, y, width, height, scallop = 35, steps = 8) {
 
 async function renderPages() {
   const pdf = await pdfjsLib.getDocument(cfg.fileUrl).promise;
+  state.pdf = pdf;
   const dpr = window.devicePixelRatio || 1;
 
   for (let n = 1; n <= pdf.numPages; n++) {
@@ -196,15 +196,14 @@ async function renderPages() {
     });
 
     const bgLayer = new Konva.Layer({ listening: false });
-    bgLayer.add(
-      new Konva.Image({
-        image: canvas,
-        x: 0,
-        y: 0,
-        width: widthPts, // PDF points; bitmap resolution is independent
-        height: heightPts,
-      })
-    );
+    const bgImage = new Konva.Image({
+      image: canvas,
+      x: 0,
+      y: 0,
+      width: widthPts, // PDF points; bitmap resolution is independent
+      height: heightPts,
+    });
+    bgLayer.add(bgImage);
 
     const annLayer = new Konva.Layer();
     const transformer = new Konva.Transformer({
@@ -223,14 +222,72 @@ async function renderPages() {
       wrap,
       stage,
       bgLayer,
+      bgImage,
       annLayer,
       transformer,
+      pdfPage,
+      bitmapScale,
+      rendering: false,
     };
     state.pages.push(page);
     bindStageEvents(page);
   }
   applyTouchAction();
 }
+
+// ---------------------------------------------------------------------------
+// Crisp zoom: re-render page bitmaps at the effective scale once zoom
+// settles (the Mozilla pdf.js approach) — visible pages only, debounced,
+// resolution capped to bound memory on large drawings.
+// ---------------------------------------------------------------------------
+
+const BITMAP_MAX_SCALE = 6;
+let rerenderTimer = null;
+
+function scheduleBitmapRerender() {
+  clearTimeout(rerenderTimer);
+  rerenderTimer = setTimeout(rerenderVisibleBitmaps, 220);
+}
+
+function pageIsNearViewport(page) {
+  const view = scrollEl.getBoundingClientRect();
+  const box = page.wrap.getBoundingClientRect();
+  const margin = view.height; // pre-render one viewport above/below
+  return box.bottom > view.top - margin && box.top < view.bottom + margin;
+}
+
+async function rerenderVisibleBitmaps() {
+  const dpr = window.devicePixelRatio || 1;
+  const target = Math.min(
+    Math.max(RENDER_SCALE, state.zoom * RENDER_SCALE) * dpr,
+    BITMAP_MAX_SCALE
+  );
+  for (const page of state.pages) {
+    if (page.rendering || Math.abs(page.bitmapScale - target) < 0.01) continue;
+    if (!pageIsNearViewport(page)) continue;
+    page.rendering = true;
+    try {
+      const viewport = page.pdfPage.getViewport({ scale: target });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      await page.pdfPage.render({
+        canvasContext: canvas.getContext('2d'),
+        viewport,
+      }).promise;
+      page.bitmapScale = target;
+      page.bgImage.image(canvas);
+      page.bgLayer.batchDraw();
+    } catch (err) {
+      console.error(`Failed to re-render page ${page.index + 1}:`, err);
+    } finally {
+      page.rendering = false;
+    }
+  }
+}
+
+// Pages scrolled into view after a zoom still need their sharp bitmap.
+scrollEl.addEventListener('scroll', scheduleBitmapRerender, { passive: true });
 
 // ---------------------------------------------------------------------------
 // Node materialization (shared by initial load, create, and undo/redo replay)
@@ -539,7 +596,9 @@ function openTextOverlay(page, posPts, existingNode) {
     : '160px';
   ta.rows = 1;
   page.wrap.appendChild(ta);
-  ta.focus();
+  // Focus after the pointer sequence completes; focusing synchronously
+  // inside pointerdown loses to the browser's default focus handling.
+  requestAnimationFrame(() => ta.focus());
 
   const autosize = () => {
     ta.style.height = 'auto';
@@ -553,12 +612,20 @@ function openTextOverlay(page, posPts, existingNode) {
     page.annLayer.batchDraw();
   }
 
+  const openedAt = performance.now();
   const overlay = {
     el: ta,
     page,
     node: existingNode || null,
     commit: () => commitText(page, pos, ta.value, existingNode, fontSize, colorCss),
-    onBlur: () => closeOverlay(true),
+    onBlur: () => {
+      // Blur fired by the tail of the opening click: reclaim focus.
+      if (performance.now() - openedAt < 250) {
+        ta.focus();
+        return;
+      }
+      closeOverlay(true);
+    },
   };
   state.overlay = overlay;
 
@@ -776,6 +843,9 @@ function bindStageEvents(page) {
       const pos = page.stage.getRelativePointerPosition();
       if (pos) startStroke(page, pos);
     } else if (state.tool === 'text') {
+      // preventDefault stops the browser's mousedown default from stealing
+      // focus back to the canvas, which would instantly blur the overlay.
+      e.evt.preventDefault();
       if (state.overlay) {
         closeOverlay(true);
         return;
@@ -867,6 +937,9 @@ function setZooms(newZoom, anchorX, anchorY) {
     if (found) positionDeleteButton(found.page, state.selected);
   }
   if (state.overlay) closeOverlay(true);
+
+  // Re-render the page bitmaps sharply for the new effective scale.
+  scheduleBitmapRerender();
 }
 
 scrollEl.addEventListener(
@@ -875,7 +948,10 @@ scrollEl.addEventListener(
     if (!e.ctrlKey) return;
     e.preventDefault();
     const rect = scrollEl.getBoundingClientRect();
-    const factor = e.deltaY < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP;
+    // Proportional exponential mapping: smooth for trackpad pinch (many
+    // small pixel deltas) and responsive for notched mice. deltaMode 1 is
+    // line-based (Firefox) and needs a larger coefficient than pixels.
+    const factor = Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.03 : 0.002));
     setZooms(state.zoom * factor, e.clientX - rect.left, e.clientY - rect.top);
   },
   { passive: false }
@@ -949,6 +1025,13 @@ window.__sherbertEditor = {
   },
   zoom() {
     return state.zoom;
+  },
+  setZoom(z) {
+    setZooms(z);
+  },
+  bitmapScale(pageIndex) {
+    const page = state.pages[pageIndex];
+    return page ? page.bitmapScale : null;
   },
   setTool,
 };

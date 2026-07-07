@@ -103,3 +103,100 @@ def test_draw_pen_stroke_persists_and_rerenders(browser, client, live_server, se
     assert page.evaluate('window.__sherbertEditor.nodeCount(0)') >= 1
 
     context.close()
+
+
+def _open_editor(browser, client, live_server, settings, pdf_doc):
+    """Log in, inject the session cookie, load the editor, and wait for ready."""
+    client.force_login(pdf_doc.user)
+    session_cookie = client.cookies[settings.SESSION_COOKIE_NAME]
+
+    context = browser.new_context()
+    context.add_cookies([{
+        'name': settings.SESSION_COOKIE_NAME,
+        'value': session_cookie.value,
+        'url': live_server.url,
+    }])
+    page = context.new_page()
+    page.goto(f'{live_server.url}/pdf/editor/{pdf_doc.pk}/')
+    page.wait_for_function(
+        'window.__sherbertEditor && (window.__sherbertEditor.ready || window.__sherbertEditor.error)',
+        timeout=30000,
+    )
+    error = page.evaluate('window.__sherbertEditor.error || null')
+    assert error is None, f'editor failed to initialize: {error}'
+    return context, page
+
+
+@pytest.mark.django_db(transaction=True)
+def test_text_annotation_persists_and_rerenders(browser, client, live_server, settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path
+    owner = User.objects.create_user('textowner', password='pw')
+    pdf_doc = PDFDocument(title='E2E Text Doc', user=owner)
+    pdf_doc.file.save('e2e_text.pdf', ContentFile(make_pdf_bytes()), save=True)
+
+    context, page = _open_editor(browser, client, live_server, settings, pdf_doc)
+
+    page.click('[data-tool="text"]')
+
+    canvas = page.locator('#sp-pages canvas').first
+    box = canvas.bounding_box()
+    assert box is not None
+    click_x = box['x'] + box['width'] * 0.3
+    click_y = box['y'] + box['height'] * 0.3
+    page.mouse.click(click_x, click_y)
+
+    # The overlay textarea is created synchronously, but focus is deferred
+    # one animation frame (and reclaimed if the opening click blurs it).
+    page.wait_for_selector('.sp-text-overlay', timeout=5000)
+    page.wait_for_function(
+        "document.activeElement && document.activeElement.classList.contains('sp-text-overlay')",
+        timeout=5000,
+    )
+
+    page.keyboard.type('Hello E2E')
+    with page.expect_response(
+        lambda r: '/api/annotations' in r.url and r.request.method == 'POST' and r.status == 201,
+        timeout=15000,
+    ):
+        page.keyboard.press('Enter')
+
+    annotation = PDFAnnotation.objects.get(annotation_type='text')
+    assert annotation.pdf_document_id == pdf_doc.pk
+    assert annotation.text_data.content == 'Hello E2E'
+
+    # Reload: the text node must come back from the API.
+    page.reload()
+    page.wait_for_function(
+        'window.__sherbertEditor && window.__sherbertEditor.ready',
+        timeout=30000,
+    )
+    assert page.evaluate('window.__sherbertEditor.nodeCount(0)') >= 1
+
+    context.close()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_zoom_rerenders_bitmap_at_higher_scale(browser, client, live_server, settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path
+    owner = User.objects.create_user('zoomowner', password='pw')
+    pdf_doc = PDFDocument(title='E2E Zoom Doc', user=owner)
+    pdf_doc.file.save('e2e_zoom.pdf', ContentFile(make_pdf_bytes()), save=True)
+
+    context, page = _open_editor(browser, client, live_server, settings, pdf_doc)
+
+    # Initial bitmap scale is RENDER_SCALE(1.5) * devicePixelRatio (1 headless).
+    initial_scale = page.evaluate('window.__sherbertEditor.bitmapScale(0)')
+    assert initial_scale is not None
+
+    page.evaluate('window.__sherbertEditor.setZoom(3)')
+
+    # The re-render is debounced (~220ms) and visible-pages-only; page 0 is
+    # in view, so its bitmap should sharpen to a higher resolution.
+    page.wait_for_function(
+        '(init) => window.__sherbertEditor.bitmapScale(0) > init',
+        arg=initial_scale,
+        timeout=10000,
+    )
+    assert page.evaluate('window.__sherbertEditor.zoom()') == 3
+
+    context.close()
