@@ -176,6 +176,54 @@ def test_text_annotation_persists_and_rerenders(browser, client, live_server, se
 
 
 @pytest.mark.django_db(transaction=True)
+def test_max_zoom_caps_canvas_backing_store(browser, client, live_server, settings, tmp_path):
+    """At max zoom the Konva scene-canvas backing store must stay within the
+    16 MP pixel budget (pdf.js maxCanvasPixels) rather than ballooning with
+    zoom, and drawing must still work at that scale (pointer coords unaffected
+    by the reduced pixel ratio)."""
+    settings.MEDIA_ROOT = tmp_path
+    owner = User.objects.create_user('memowner', password='pw')
+    pdf_doc = PDFDocument(title='E2E Zoom Mem Doc', user=owner)
+    pdf_doc.file.save('e2e_mem.pdf', ContentFile(make_pdf_bytes()), save=True)
+
+    context, page = _open_editor(browser, client, live_server, settings, pdf_doc)
+
+    page.evaluate('window.__sherbertEditor.setZoom(4)')  # MAX_ZOOM
+    assert page.evaluate('window.__sherbertEditor.zoom()') == 4
+
+    # The first #sp-pages canvas is page 0's background scene canvas. Its
+    # backing store (width*height device pixels) must respect the budget.
+    dims = page.evaluate(
+        """() => {
+            const c = document.querySelector('#sp-pages canvas');
+            return { w: c.width, h: c.height };
+        }"""
+    )
+    budget = 16777216
+    assert dims['w'] * dims['h'] <= budget * 1.02, (
+        f'scene canvas {dims} = {dims["w"] * dims["h"]}px exceeds 16 MP budget'
+    )
+
+    # Drawing still works at max zoom (over the now-large centered page).
+    page.click('[data-tool="pen"]')
+    scroll_box = page.locator('#sp-scroll').bounding_box()
+    sx = scroll_box['x'] + scroll_box['width'] * 0.5
+    sy = scroll_box['y'] + scroll_box['height'] * 0.5
+    with page.expect_response(
+        lambda r: '/api/annotations' in r.url and r.request.method == 'POST' and r.status == 201,
+        timeout=15000,
+    ):
+        page.mouse.move(sx, sy)
+        page.mouse.down()
+        for i in range(1, 6):
+            page.mouse.move(sx + i * 10, sy + i * 6)
+        page.mouse.up()
+    assert PDFAnnotation.objects.filter(annotation_type='pen').count() >= 1
+
+    context.close()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_zoom_rerenders_bitmap_at_higher_scale(browser, client, live_server, settings, tmp_path):
     settings.MEDIA_ROOT = tmp_path
     owner = User.objects.create_user('zoomowner', password='pw')
@@ -202,30 +250,10 @@ def test_zoom_rerenders_bitmap_at_higher_scale(browser, client, live_server, set
     context.close()
 
 
-@pytest.mark.django_db(transaction=True)
-def test_ctrl_wheel_zoom_previews_then_commits_cleanly(browser, client, live_server, settings, tmp_path):
-    """A burst of ctrl+wheel events must preview via CSS, then commit once —
-    leaving no lingering transform and no corrupted pointer coordinates."""
-    settings.MEDIA_ROOT = tmp_path
-    owner = User.objects.create_user('wheelowner', password='pw')
-    pdf_doc = PDFDocument(title='E2E Wheel Zoom Doc', user=owner)
-    pdf_doc.file.save('e2e_wheel.pdf', ContentFile(make_pdf_bytes()), save=True)
-
-    context, page = _open_editor(browser, client, live_server, settings, pdf_doc)
-
-    assert page.evaluate('window.__sherbertEditor.zoom()') == 1
-
-    canvas = page.locator('#sp-pages canvas').first
-    box = canvas.bounding_box()
-    assert box is not None
-    cx = box['x'] + box['width'] * 0.5
-    cy = box['y'] + box['height'] * 0.5
-
-    # Record the DOCUMENT point (PDF points on page 0) under the cursor before
-    # the gesture, using the committed page rect + stage scale at zoom 1. The
-    # anchor must survive the phase-2 snap: this same document point should map
-    # back to the same screen pixel after the committed zoom lands.
-    anchor_pts = page.evaluate(
+def _doc_point_under(page, cx, cy):
+    """Document point (PDF points on page 0) under viewport pixel (cx, cy),
+    read against the committed page rect + stage scale."""
+    return page.evaluate(
         """([cx, cy]) => {
             const p0 = window.__sherbertEditor.state.pages[0];
             const r = p0.wrap.getBoundingClientRect();
@@ -235,17 +263,21 @@ def test_ctrl_wheel_zoom_previews_then_commits_cleanly(browser, client, live_ser
         [cx, cy],
     )
 
-    # Fire a rapid burst of ctrl+wheel zoom-in events (negative deltaY).
-    page.mouse.move(cx, cy)
-    page.keyboard.down('Control')
-    for _ in range(8):
-        page.mouse.wheel(0, -60)
-    page.keyboard.up('Control')
 
-    # (b) Phase-2 commit is debounced (~180ms); the committed zoom changes from 1.
-    page.wait_for_function('() => window.__sherbertEditor.zoom() > 1', timeout=10000)
+def _screen_of_doc_point(page, px, py):
+    """Where document point (px, py) on page 0 currently sits on screen."""
+    return page.evaluate(
+        """([px, py]) => {
+            const p0 = window.__sherbertEditor.state.pages[0];
+            const r = p0.wrap.getBoundingClientRect();
+            const scale = p0.stage.scaleX();
+            return { x: r.left + px * scale, y: r.top + py * scale };
+        }""",
+        [px, py],
+    )
 
-    # (a) No CSS transform survives the commit on #sp-pages.
+
+def _assert_no_lingering_transform(page):
     transform = page.evaluate(
         "() => { const el = document.getElementById('sp-pages');"
         " return [el.style.transform, getComputedStyle(el).transform]; }"
@@ -253,28 +285,74 @@ def test_ctrl_wheel_zoom_previews_then_commits_cleanly(browser, client, live_ser
     assert transform[0] == '', f'inline transform lingered: {transform[0]!r}'
     assert transform[1] in ('', 'none'), f'computed transform lingered: {transform[1]!r}'
 
-    # (d) The anchor held: recompute where the recorded document point now sits
-    # on screen (new page rect + new stage scale) and assert it is still under
-    # the cursor. Proportional re-anchoring would have jumped it (the page is
-    # auto-centered and separated by fixed-pixel gaps), reading as re-centering.
-    screen = page.evaluate(
-        """([px, py]) => {
-            const p0 = window.__sherbertEditor.state.pages[0];
-            const r = p0.wrap.getBoundingClientRect();
-            const scale = p0.stage.scaleX();
-            return { x: r.left + px * scale, y: r.top + py * scale };
-        }""",
-        [anchor_pts['x'], anchor_pts['y']],
-    )
-    assert abs(screen['x'] - cx) <= 8, f'anchor x drifted: {screen["x"]} vs {cx}'
-    assert abs(screen['y'] - cy) <= 8, f'anchor y drifted: {screen["y"]} vs {cy}'
 
-    # (c) Drawing still works after the gesture — coordinates were not corrupted.
-    # The anchor point (cx, cy) is held stationary through the commit, so it is
-    # guaranteed to still be over the (now larger) page and inside the viewport.
+@pytest.mark.django_db(transaction=True)
+def test_ctrl_wheel_zoom_per_axis_fitting(browser, client, live_server, settings, tmp_path):
+    """pdf.js per-axis zoom, page still FITTING horizontally after the burst.
+
+    The US-Letter page (918x1188px at zoom 1) FITS the 1280px-wide viewport
+    and OVERFLOWS its ~672px height. Zooming in a little (end zoom ~1.25) keeps
+    the page fitting horizontally, so the horizontal axis must stay CENTERED (no
+    drift toward the off-center cursor); the vertical axis overflows, so its
+    document point under the cursor must hold (directional)."""
+    settings.MEDIA_ROOT = tmp_path
+    owner = User.objects.create_user('wheelowner', password='pw')
+    pdf_doc = PDFDocument(title='E2E Wheel Zoom Doc', user=owner)
+    pdf_doc.file.save('e2e_wheel.pdf', ContentFile(make_pdf_bytes()), save=True)
+
+    context, page = _open_editor(browser, client, live_server, settings, pdf_doc)
+    assert page.evaluate('window.__sherbertEditor.zoom()') == 1
+
+    canvas = page.locator('#sp-pages canvas').first
+    box = canvas.bounding_box()
+    assert box is not None
+    # Cursor deliberately OFF horizontal center (0.75): a wrongly cursor-anchored
+    # horizontal axis would drift the page left; correct centering ignores it.
+    cx = box['x'] + box['width'] * 0.75
+    cy = box['y'] + box['height'] * 0.3
+
+    anchor_pts = _doc_point_under(page, cx, cy)
+
+    # Small zoom-in burst: exp(0.12) per -60 event => ~1.27 after 2 events,
+    # still under the horizontal-fit threshold (~1.39 for a 918px page).
+    page.mouse.move(cx, cy)
+    page.keyboard.down('Control')
+    for _ in range(2):
+        page.mouse.wheel(0, -60)
+    page.keyboard.up('Control')
+
+    page.wait_for_function('() => window.__sherbertEditor.zoom() > 1', timeout=10000)
+    end_zoom = page.evaluate('window.__sherbertEditor.zoom()')
+    assert 1.0 < end_zoom < 1.35, f'unexpected end zoom {end_zoom}'
+
+    # (a) No CSS transform survives the commit.
+    _assert_no_lingering_transform(page)
+
+    # (b) Horizontal: the page wrap stays centered in the viewport.
+    centering = page.evaluate(
+        """() => {
+            const scroll = document.getElementById('sp-scroll');
+            const sr = scroll.getBoundingClientRect();
+            const r = window.__sherbertEditor.state.pages[0].wrap.getBoundingClientRect();
+            return {
+                pageCenterX: r.left + r.width / 2,
+                viewportCenterX: sr.left + scroll.clientWidth / 2,
+            };
+        }"""
+    )
+    assert abs(centering['pageCenterX'] - centering['viewportCenterX']) <= 2, (
+        f'horizontal not centered: {centering}'
+    )
+
+    # (c) Vertical (overflowing): the document point under the cursor holds.
+    screen = _screen_of_doc_point(page, anchor_pts['x'], anchor_pts['y'])
+    assert abs(screen['y'] - cy) <= 8, f'vertical anchor drifted: {screen["y"]} vs {cy}'
+
+    # (d) Drawing still works — pointer coordinates were not corrupted. Draw at
+    # the (centered) page center, guaranteed on-page and inside the viewport.
     page.click('[data-tool="pen"]')
-    sx = cx - 40
-    sy = cy - 20
+    sx = centering['viewportCenterX']
+    sy = cy
     with page.expect_response(
         lambda r: '/api/annotations' in r.url and r.request.method == 'POST' and r.status == 201,
         timeout=15000,
@@ -286,5 +364,47 @@ def test_ctrl_wheel_zoom_previews_then_commits_cleanly(browser, client, live_ser
         page.mouse.up()
 
     assert PDFAnnotation.objects.filter(annotation_type='pen').count() >= 1
+
+    context.close()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ctrl_wheel_zoom_directional_once_overflowing(browser, client, live_server, settings, tmp_path):
+    """Once the page is 'fully covered' on an axis, directional zoom unlocks.
+
+    A bigger zoom-in burst (end zoom well past ~1.4) pushes the 918px page past
+    the viewport width, so the HORIZONTAL axis becomes cursor-anchored: the
+    document point under the (off-center) cursor must now hold on both axes."""
+    settings.MEDIA_ROOT = tmp_path
+    owner = User.objects.create_user('wheelowner2', password='pw')
+    pdf_doc = PDFDocument(title='E2E Wheel Zoom Doc 2', user=owner)
+    pdf_doc.file.save('e2e_wheel2.pdf', ContentFile(make_pdf_bytes()), save=True)
+
+    context, page = _open_editor(browser, client, live_server, settings, pdf_doc)
+    assert page.evaluate('window.__sherbertEditor.zoom()') == 1
+
+    canvas = page.locator('#sp-pages canvas').first
+    box = canvas.bounding_box()
+    assert box is not None
+    cx = box['x'] + box['width'] * 0.75
+    cy = box['y'] + box['height'] * 0.3
+
+    anchor_pts = _doc_point_under(page, cx, cy)
+
+    # Large burst: exp(0.12) per -60 event => ~2.6 after 8 events, well past the
+    # horizontal-fit threshold, so horizontal overflows and goes directional.
+    page.mouse.move(cx, cy)
+    page.keyboard.down('Control')
+    for _ in range(8):
+        page.mouse.wheel(0, -60)
+    page.keyboard.up('Control')
+
+    page.wait_for_function('() => window.__sherbertEditor.zoom() > 1.4', timeout=10000)
+    _assert_no_lingering_transform(page)
+
+    # The document point under the cursor now holds on BOTH axes (directional).
+    screen = _screen_of_doc_point(page, anchor_pts['x'], anchor_pts['y'])
+    assert abs(screen['x'] - cx) <= 8, f'horizontal anchor drifted: {screen["x"]} vs {cx}'
+    assert abs(screen['y'] - cy) <= 8, f'vertical anchor drifted: {screen["y"]} vs {cy}'
 
     context.close()

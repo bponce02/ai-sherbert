@@ -227,8 +227,12 @@ async function renderPages() {
       transformer,
       pdfPage,
       bitmapScale,
+      bitmapCanvas: canvas, // reused in place by rerenderVisibleBitmaps
+      pendingScale: null, // set when an off-screen stage resize is deferred
       rendering: false,
     };
+    // Keep even the zoom-1 backing store within budget for large-format pages.
+    applyStagePixelRatio(page, stagePixelRatio(page, scale));
     state.pages.push(page);
     bindStageEvents(page);
   }
@@ -236,12 +240,63 @@ async function renderPages() {
 }
 
 // ---------------------------------------------------------------------------
-// Crisp zoom: re-render page bitmaps at the effective scale once zoom
-// settles (the Mozilla pdf.js approach) — visible pages only, debounced,
-// resolution capped to bound memory on large drawings.
+// Memory budget: cap every canvas backing store at pdf.js's default
+// maxCanvasPixels (16 MP). Konva scene AND hit canvases scale with the stage
+// pixel size (× devicePixelRatio²); at zoom 4 a Letter page is a ~70 MB buffer
+// per layer, and large-format pages are hundreds of MB — multiplied across all
+// pages. We keep the CSS size at widthPts*k but clamp the backing-store pixel
+// ratio so width_px * height_px stays within the budget. Slightly softer at
+// extreme zoom — the same trade-off pdf.js makes.
 // ---------------------------------------------------------------------------
 
-const BITMAP_MAX_SCALE = 6;
+const PIXEL_BUDGET = 16777216; // 16 MP (pdf.js maxCanvasPixels)
+
+/* Pixel ratio for a stage's backing store at a given committed scale: capped
+ * so cssW*pr * cssH*pr <= PIXEL_BUDGET, and never above the device ratio. */
+function stagePixelRatio(page, scale) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = page.widthPts * scale;
+  const cssH = page.heightPts * scale;
+  if (cssW <= 0 || cssH <= 0) return dpr;
+  return Math.min(dpr, Math.sqrt(PIXEL_BUDGET / (cssW * cssH)));
+}
+
+/* Apply a pixel ratio to a stage's scene and hit canvases (both layers).
+ * Pointer math (getRelativePointerPosition) is ratio-independent and the
+ * Transformer reads getClientRect, so selection/hit-testing are unaffected. */
+function applyStagePixelRatio(page, pr) {
+  for (const layer of page.stage.getLayers()) {
+    const scene = layer.getCanvas && layer.getCanvas();
+    if (scene && scene.getPixelRatio() !== pr) scene.setPixelRatio(pr);
+    const hit = layer.getHitCanvas && layer.getHitCanvas();
+    if (hit && hit.getPixelRatio() !== pr) hit.setPixelRatio(pr);
+  }
+}
+
+/* Commit a page's stage to `scale`: set the budgeted pixel ratio FIRST (so the
+ * backing store is never allocated at the uncapped device resolution even
+ * transiently), then resize and redraw. Clears any deferred/reserved state. */
+function applyStageScale(page, scale) {
+  page.pendingScale = null;
+  applyStagePixelRatio(page, stagePixelRatio(page, scale));
+  page.stage.scale({ x: scale, y: scale });
+  page.stage.size({ width: page.widthPts * scale, height: page.heightPts * scale });
+  page.stage.batchDraw();
+  // Drop any layout reservation now that the real canvas carries the size.
+  page.wrap.style.width = '';
+  page.wrap.style.height = '';
+}
+
+/* Defer an off-screen page's stage resize to keep commit cost and peak memory
+ * proportional to VISIBLE pages, not document size. Reserve the wrap's layout
+ * box (cheap, no canvas allocation) so pages below don't jump, and record the
+ * pending scale; applyPendingStageScales() finishes the job on scroll-in. */
+function deferStageScale(page, scale) {
+  page.pendingScale = scale;
+  page.wrap.style.width = `${page.widthPts * scale}px`;
+  page.wrap.style.height = `${page.heightPts * scale}px`;
+}
+
 let rerenderTimer = null;
 
 function scheduleBitmapRerender() {
@@ -256,19 +311,28 @@ function pageIsNearViewport(page) {
   return box.bottom > view.top - margin && box.top < view.bottom + margin;
 }
 
-async function rerenderVisibleBitmaps() {
+/* Effective render scale for a page's bitmap, area-capped so the bitmap canvas
+ * itself stays within the pixel budget (a scale cap would let a large-format
+ * page balloon into a gigapixel canvas). */
+function bitmapTargetScale(page) {
   const dpr = window.devicePixelRatio || 1;
-  const target = Math.min(
-    Math.max(RENDER_SCALE, state.zoom * RENDER_SCALE) * dpr,
-    BITMAP_MAX_SCALE
-  );
+  const desired = Math.max(RENDER_SCALE, state.zoom * RENDER_SCALE) * dpr;
+  const areaCap = Math.sqrt(PIXEL_BUDGET / (page.widthPts * page.heightPts));
+  return Math.min(desired, areaCap);
+}
+
+async function rerenderVisibleBitmaps() {
   for (const page of state.pages) {
+    const target = bitmapTargetScale(page);
     if (page.rendering || Math.abs(page.bitmapScale - target) < 0.01) continue;
     if (!pageIsNearViewport(page)) continue;
     page.rendering = true;
     try {
       const viewport = page.pdfPage.getViewport({ scale: target });
-      const canvas = document.createElement('canvas');
+      // Reuse the page's existing bitmap canvas in place to avoid allocating a
+      // fresh multi-MB buffer on every zoom settle (old ones churn the GC).
+      const canvas = page.bitmapCanvas || document.createElement('canvas');
+      page.bitmapCanvas = canvas;
       canvas.width = Math.floor(viewport.width);
       canvas.height = Math.floor(viewport.height);
       await page.pdfPage.render({
@@ -283,11 +347,32 @@ async function rerenderVisibleBitmaps() {
     } finally {
       page.rendering = false;
     }
+    // Zoom changed again mid-render: this bitmap is stale — re-schedule.
+    if (Math.abs(bitmapTargetScale(page) - target) > 0.01) scheduleBitmapRerender();
   }
 }
 
-// Pages scrolled into view after a zoom still need their sharp bitmap.
-scrollEl.addEventListener('scroll', scheduleBitmapRerender, { passive: true });
+/* Stage resizes deferred while off-screen must land BEFORE the page is drawn
+ * on/interacted with, so apply them synchronously (not debounced) as pages
+ * scroll near — otherwise pointer coordinates would use a stale stage scale. */
+function applyPendingStageScales() {
+  for (const page of state.pages) {
+    if (page.pendingScale != null && pageIsNearViewport(page)) {
+      applyStageScale(page, page.pendingScale);
+    }
+  }
+}
+
+// Pages scrolled into view after a zoom need their committed stage size (sync)
+// and their sharp bitmap (debounced).
+scrollEl.addEventListener(
+  'scroll',
+  () => {
+    applyPendingStageScales();
+    scheduleBitmapRerender();
+  },
+  { passive: true }
+);
 
 // ---------------------------------------------------------------------------
 // Node materialization (shared by initial load, create, and undo/redo replay)
@@ -926,8 +1011,29 @@ deleteBtn.addEventListener('click', (e) => {
 // ---------------------------------------------------------------------------
 
 const ZOOM_COMMIT_DELAY = 180;
-let zoomPreview = null; // active gesture: { pending, anchorAx, anchorAy, originX, originY }
+// active gesture: { pending, anchorAx, anchorAy, startScrollLeft, startScrollTop, anchorPage }
+let zoomPreview = null;
 let zoomCommitTimer = null;
+
+/* Widest page — the fallback anchor for the per-axis fit test when the cursor
+ * resolves to no page (e.g. an empty document). */
+function widestPage() {
+  let best = null;
+  for (const p of state.pages) if (!best || p.widthPts > best.widthPts) best = p;
+  return best;
+}
+
+/* Per-axis fit test at a given zoom for the gesture's anchor page: does the
+ * page's DISPLAYED size (widthPts * RENDER_SCALE * zoom) fit within the scroll
+ * viewport on each axis? A fitting axis is centered (h) / top-anchored (v)
+ * during zoom; an overflowing axis is cursor-anchored (pdf.js directional). */
+function axisFits(page, zoom) {
+  const s = RENDER_SCALE * zoom;
+  return {
+    x: !page || page.widthPts * s <= scrollEl.clientWidth + 0.5,
+    y: !page || page.heightPts * s <= scrollEl.clientHeight + 0.5,
+  };
+}
 
 /* Resolve a viewport point to a document anchor. (px, py) are cursor coords
  * relative to scrollEl's client rect. Returns { pageIndex, pointPts } where
@@ -991,24 +1097,31 @@ function setZooms(newZoom, anchorX, anchorY) {
 
   state.zoom = newZoom;
   const scale = k();
+  // Resize/redraw VISIBLE stages now (bounded, pixel-budgeted); defer the rest
+  // so peak memory and commit cost track visible pages, not document length.
   for (const page of state.pages) {
-    page.stage.scale({ x: scale, y: scale });
-    page.stage.size({ width: page.widthPts * scale, height: page.heightPts * scale });
-    page.stage.batchDraw();
+    if (pageIsNearViewport(page)) applyStageScale(page, scale);
+    else deferStageScale(page, scale);
   }
 
-  // Re-anchor: read the reflowed page position (getBoundingClientRect forces
-  // the one synchronous reflow we need) and scroll so the anchored document
-  // point lands back under the cursor. The browser clamps at the edges.
+  // Re-anchor PER-AXIS (pdf.js). Read the reflowed page position
+  // (getBoundingClientRect forces the one synchronous reflow we need).
+  //  - Overflowing axis: scroll so the anchored document point lands back under
+  //    the cursor (directional zoom); the browser clamps at the edges.
+  //  - Fitting axis: no overflow, so margin:auto centering (h) / the top clamp
+  //    (v) owns the position. Force scroll to 0 to land exactly where the CSS
+  //    preview showed the page — this is what makes "no step at commit" hold.
   if (anchor) {
+    const anchorPage = state.pages[anchor.pageIndex];
+    const fits = axisFits(anchorPage, state.zoom);
     const scrollRect = scrollEl.getBoundingClientRect();
-    const r = state.pages[anchor.pageIndex].wrap.getBoundingClientRect();
+    const r = anchorPage.wrap.getBoundingClientRect();
     // pageContentLeft is scroll-independent: scrollLeft cancels against the
     // scroll baked into (r.left - scrollRect.left).
     const contentX = scrollEl.scrollLeft + (r.left - scrollRect.left) + anchor.pointPts.x * scale;
     const contentY = scrollEl.scrollTop + (r.top - scrollRect.top) + anchor.pointPts.y * scale;
-    scrollEl.scrollLeft = contentX - px;
-    scrollEl.scrollTop = contentY - py;
+    scrollEl.scrollLeft = fits.x ? 0 : contentX - px;
+    scrollEl.scrollTop = fits.y ? 0 : contentY - py;
   }
 
   document.getElementById('sp-zoom-label').textContent = `${Math.round(state.zoom * 100)}%`;
@@ -1054,17 +1167,19 @@ function previewZoom(deltaY, deltaMode, ax, ay) {
   const factor = Math.exp(-deltaY * (deltaMode === 1 ? 0.03 : 0.002));
 
   if (!zoomPreview) {
-    // First event of the gesture fixes the anchor. #sp-pages is the sole
-    // child of #sp-scroll (no scroll-container padding/border), so a cursor
-    // point (ax, ay) in the viewport maps to #sp-pages content coordinates
-    // (scrollLeft + ax, scrollTop + ay). Using that as transform-origin keeps
-    // the anchored content point stationary while the CSS scale plays.
+    // First event of the gesture fixes the anchor. #sp-pages is the sole child
+    // of #sp-scroll (no scroll-container padding/border), so a cursor point
+    // (ax, ay) in the viewport maps to #sp-pages content coordinates
+    // A = (scrollLeft + ax, scrollTop + ay). The anchor PAGE (page under the
+    // cursor, else the widest) drives the per-axis fit test each event.
+    const anchor = resolveAnchor(ax, ay);
     zoomPreview = {
       pending: state.zoom,
       anchorAx: ax,
       anchorAy: ay,
-      originX: scrollEl.scrollLeft + ax,
-      originY: scrollEl.scrollTop + ay,
+      startScrollLeft: scrollEl.scrollLeft,
+      startScrollTop: scrollEl.scrollTop,
+      anchorPage: anchor ? state.pages[anchor.pageIndex] : widestPage(),
     };
     // Transient UI would be mis-positioned relative to preview-scaled content.
     deleteBtn.style.display = 'none';
@@ -1074,8 +1189,25 @@ function previewZoom(deltaY, deltaMode, ax, ay) {
   const pending = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoomPreview.pending * factor));
   zoomPreview.pending = pending;
 
-  pagesEl.style.transformOrigin = `${zoomPreview.originX}px ${zoomPreview.originY}px`;
-  pagesEl.style.transform = `scale(${pending / state.zoom})`;
+  // Preview with an explicit `translate(tx, ty) scale(r)` about origin 0,0 so
+  // tx and ty are chosen INDEPENDENTLY per axis (r = pending/committed). This
+  // is what lets a fitting axis stay centered/top while an overflowing axis
+  // tracks the cursor — a single transform-origin cannot express both.
+  const r = pending / state.zoom;
+  const fits = axisFits(zoomPreview.anchorPage, pending);
+  // A = committed content point under the cursor at gesture start (fixed for
+  // the whole gesture; the preview never changes scroll).
+  const ax0 = zoomPreview.startScrollLeft + zoomPreview.anchorAx;
+  const ay0 = zoomPreview.startScrollTop + zoomPreview.anchorAy;
+  //  - fitting x: page center (viewport center, scrollLeft 0) stays put.
+  //  - fitting y: the top edge (content at startScrollTop, ~0) stays put.
+  //  - overflowing axis: the content point A under the cursor stays put:
+  //    displayed = t + r*A - scroll must equal cursor  =>  t = A*(1 - r).
+  const tx = fits.x ? (scrollEl.clientWidth / 2) * (1 - r) : ax0 * (1 - r);
+  const ty = fits.y ? zoomPreview.startScrollTop * (1 - r) : ay0 * (1 - r);
+
+  pagesEl.style.transformOrigin = '0 0';
+  pagesEl.style.transform = `translate(${tx}px, ${ty}px) scale(${r})`;
 
   document.getElementById('sp-zoom-label').textContent = `${Math.round(pending * 100)}%`;
 
