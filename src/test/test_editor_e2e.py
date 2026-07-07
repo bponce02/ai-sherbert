@@ -221,6 +221,20 @@ def test_ctrl_wheel_zoom_previews_then_commits_cleanly(browser, client, live_ser
     cx = box['x'] + box['width'] * 0.5
     cy = box['y'] + box['height'] * 0.5
 
+    # Record the DOCUMENT point (PDF points on page 0) under the cursor before
+    # the gesture, using the committed page rect + stage scale at zoom 1. The
+    # anchor must survive the phase-2 snap: this same document point should map
+    # back to the same screen pixel after the committed zoom lands.
+    anchor_pts = page.evaluate(
+        """([cx, cy]) => {
+            const p0 = window.__sherbertEditor.state.pages[0];
+            const r = p0.wrap.getBoundingClientRect();
+            const scale = p0.stage.scaleX();
+            return { x: (cx - r.left) / scale, y: (cy - r.top) / scale };
+        }""",
+        [cx, cy],
+    )
+
     # Fire a rapid burst of ctrl+wheel zoom-in events (negative deltaY).
     page.mouse.move(cx, cy)
     page.keyboard.down('Control')
@@ -238,6 +252,22 @@ def test_ctrl_wheel_zoom_previews_then_commits_cleanly(browser, client, live_ser
     )
     assert transform[0] == '', f'inline transform lingered: {transform[0]!r}'
     assert transform[1] in ('', 'none'), f'computed transform lingered: {transform[1]!r}'
+
+    # (d) The anchor held: recompute where the recorded document point now sits
+    # on screen (new page rect + new stage scale) and assert it is still under
+    # the cursor. Proportional re-anchoring would have jumped it (the page is
+    # auto-centered and separated by fixed-pixel gaps), reading as re-centering.
+    screen = page.evaluate(
+        """([px, py]) => {
+            const p0 = window.__sherbertEditor.state.pages[0];
+            const r = p0.wrap.getBoundingClientRect();
+            const scale = p0.stage.scaleX();
+            return { x: r.left + px * scale, y: r.top + py * scale };
+        }""",
+        [anchor_pts['x'], anchor_pts['y']],
+    )
+    assert abs(screen['x'] - cx) <= 8, f'anchor x drifted: {screen["x"]} vs {cx}'
+    assert abs(screen['y'] - cy) <= 8, f'anchor y drifted: {screen["y"]} vs {cy}'
 
     # (c) Drawing still works after the gesture — coordinates were not corrupted.
     # The anchor point (cx, cy) is held stationary through the commit, so it is

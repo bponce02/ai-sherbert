@@ -929,11 +929,50 @@ const ZOOM_COMMIT_DELAY = 180;
 let zoomPreview = null; // active gesture: { pending, anchorAx, anchorAy, originX, originY }
 let zoomCommitTimer = null;
 
+/* Resolve a viewport point to a document anchor. (px, py) are cursor coords
+ * relative to scrollEl's client rect. Returns { pageIndex, pointPts } where
+ * pointPts is the point in PDF points within that page, or null if there are
+ * no pages. MUST be called against the committed layout (no CSS preview
+ * transform applied), since it reads getBoundingClientRect at the current
+ * committed scale k(). The cursor is attributed to the page it falls inside
+ * vertically, or the nearest page if it lands in a gutter/margin — matching
+ * how pdf.js anchors zoom to a document point rather than a screen point. */
+function resolveAnchor(px, py) {
+  if (!state.pages.length) return null;
+  const scrollRect = scrollEl.getBoundingClientRect();
+  const clientX = scrollRect.left + px;
+  const clientY = scrollRect.top + py;
+  const scale = k();
+
+  let best = null;
+  let bestDist = Infinity;
+  for (const page of state.pages) {
+    const r = page.wrap.getBoundingClientRect();
+    // Vertical distance from cursor to this page's rect (0 when inside it).
+    const dy = clientY < r.top ? r.top - clientY : clientY > r.bottom ? clientY - r.bottom : 0;
+    if (dy < bestDist) {
+      bestDist = dy;
+      best = { page, r };
+      if (dy === 0) break; // pages stack top-to-bottom; first hit is the one
+    }
+  }
+  const { page, r } = best;
+  return {
+    pageIndex: page.index,
+    pointPts: { x: (clientX - r.left) / scale, y: (clientY - r.top) / scale },
+  };
+}
+
 /* setZooms is the single commit primitive: it applies `newZoom` via
  * stage.scale + stage.size + batchDraw across all pages and re-anchors the
- * scroll so the point under (anchorX, anchorY) — cursor coords relative to
- * scrollEl's client rect — stays stationary. Callers pass the SAME anchor the
- * preview captured at gesture start so the composed result lands correctly. */
+ * scroll so the document point under (anchorX, anchorY) — cursor coords
+ * relative to scrollEl's client rect — stays stationary (pdf.js-style).
+ *
+ * Anchoring is by document point, NOT by proportional scroll scaling: pages
+ * are auto-centered (margin: 0 auto) and separated by fixed-pixel gaps, so a
+ * content coordinate does not scale linearly with zoom. We instead resolve the
+ * anchor to a page + PDF point BEFORE the resize, then read the reflowed page
+ * position AFTER it and scroll so that point lands back under the cursor. */
 function setZooms(newZoom, anchorX, anchorY) {
   // Defensive: the committed path owns stage.scale exclusively. Any lingering
   // CSS preview transform would desync container pixels from stage points.
@@ -947,9 +986,8 @@ function setZooms(newZoom, anchorX, anchorY) {
 
   const px = anchorX == null ? scrollEl.clientWidth / 2 : anchorX;
   const py = anchorY == null ? scrollEl.clientHeight / 2 : anchorY;
-  const contentX = scrollEl.scrollLeft + px;
-  const contentY = scrollEl.scrollTop + py;
-  const ratio = newZoom / state.zoom;
+  // Resolve the anchor against the CURRENT (pre-zoom) committed layout.
+  const anchor = resolveAnchor(px, py);
 
   state.zoom = newZoom;
   const scale = k();
@@ -959,9 +997,19 @@ function setZooms(newZoom, anchorX, anchorY) {
     page.stage.batchDraw();
   }
 
-  // Zoom-to-cursor: keep the content point under the anchor stationary.
-  scrollEl.scrollLeft = contentX * ratio - px;
-  scrollEl.scrollTop = contentY * ratio - py;
+  // Re-anchor: read the reflowed page position (getBoundingClientRect forces
+  // the one synchronous reflow we need) and scroll so the anchored document
+  // point lands back under the cursor. The browser clamps at the edges.
+  if (anchor) {
+    const scrollRect = scrollEl.getBoundingClientRect();
+    const r = state.pages[anchor.pageIndex].wrap.getBoundingClientRect();
+    // pageContentLeft is scroll-independent: scrollLeft cancels against the
+    // scroll baked into (r.left - scrollRect.left).
+    const contentX = scrollEl.scrollLeft + (r.left - scrollRect.left) + anchor.pointPts.x * scale;
+    const contentY = scrollEl.scrollTop + (r.top - scrollRect.top) + anchor.pointPts.y * scale;
+    scrollEl.scrollLeft = contentX - px;
+    scrollEl.scrollTop = contentY - py;
+  }
 
   document.getElementById('sp-zoom-label').textContent = `${Math.round(state.zoom * 100)}%`;
 
