@@ -96,6 +96,28 @@ html, body {
   width: 90px;
 }
 
+/* Stamp palette thumbnails */
+#sp-toolbar .sp-stamp-swatch {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 1px 3px;
+  background: #ffffff;
+}
+
+#sp-toolbar .sp-stamp-swatch img {
+  height: 22px;
+  width: auto;
+  max-width: 64px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+#sp-toolbar .sp-stamp-swatch.sp-active {
+  border-color: #3b82f6;
+  background: #dbeafe;
+}
+
 #sp-zoom-label {
   min-width: 3.2em;
   text-align: center;

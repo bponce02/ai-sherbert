@@ -8,9 +8,20 @@ existence of documents is not leaked.
 """
 from django.conf import settings
 from django.http import Http404
+from django.templatetags.static import static
 from django.views.generic import TemplateView
 
 from .access import check_pdf_access
+
+
+def default_stamps():
+    """Two built-in demo stamps shipped in the package. Used when the host
+    project does not define ``SHERBERT_PDF_STAMPS``. URLs are resolved through
+    ``static()`` so they honour the host's ``STATIC_URL``."""
+    return [
+        {'label': 'Approved', 'url': static('sherbert_pdf/stamps/approved.png')},
+        {'label': 'Rejected', 'url': static('sherbert_pdf/stamps/rejected.png')},
+    ]
 
 
 class EditorView(TemplateView):
@@ -32,6 +43,12 @@ class EditorView(TemplateView):
         # example project's mount point. Hosts can override via settings.
         api_base = getattr(settings, 'SHERBERT_PDF_API_BASE', '/api')
 
+        # Configurable stamp palette: list of {'label', 'url'}. Falls back to
+        # the two package demo stamps when the host has not configured any.
+        stamps = getattr(settings, 'SHERBERT_PDF_STAMPS', None)
+        if not stamps:
+            stamps = default_stamps()
+
         context['pdf'] = pdf_doc
         context['api_base'] = api_base
         context['editor_config'] = {
@@ -39,5 +56,6 @@ class EditorView(TemplateView):
             'fileUrl': pdf_doc.file.url if pdf_doc.file else '',
             'apiBase': api_base,
             'userId': self.request.user.id,
+            'stamps': stamps,
         }
         return context

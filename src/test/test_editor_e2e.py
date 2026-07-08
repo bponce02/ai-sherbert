@@ -532,3 +532,213 @@ def test_ctrl_wheel_zoom_directional_once_overflowing(browser, client, live_serv
     assert abs(screen['y'] - cy) <= 8, f'vertical anchor drifted: {screen["y"]} vs {cy}'
 
     context.close()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_stamp_annotation_persists_and_rerenders(browser, client, live_server, settings, tmp_path):
+    """Stamp tool: pick a palette stamp, click the page → a stamp annotation is
+    POSTed with sane x/y/w/h, and it re-renders on reload."""
+    settings.MEDIA_ROOT = tmp_path
+    owner = User.objects.create_user('stampowner', password='pw')
+    pdf_doc = PDFDocument(title='E2E Stamp Doc', user=owner)
+    pdf_doc.file.save('e2e_stamp.pdf', ContentFile(make_pdf_bytes()), save=True)
+
+    context, page = _open_editor(browser, client, live_server, settings, pdf_doc)
+
+    page.click('[data-tool="stamp"]')
+    page.evaluate('window.__sherbertEditor.pickStamp(0)')
+
+    canvas = page.locator('#sp-pages canvas').first
+    box = canvas.bounding_box()
+    assert box is not None
+    click_x = box['x'] + box['width'] * 0.4
+    click_y = box['y'] + box['height'] * 0.4
+    with page.expect_response(
+        lambda r: '/api/annotations' in r.url and r.request.method == 'POST' and r.status == 201,
+        timeout=15000,
+    ):
+        page.mouse.click(click_x, click_y)
+
+    annotation = PDFAnnotation.objects.get(annotation_type='stamp')
+    assert annotation.pdf_document_id == pdf_doc.pk
+    sd = annotation.stamp_data
+    assert sd.width > 0 and sd.height > 0
+    # Centered on the click point, so the top-left is above/left of it.
+    assert sd.x >= 0 and sd.y >= 0
+    assert 'sherbert_pdf/stamps/' in sd.image_url
+
+    page.reload()
+    page.wait_for_function(
+        'window.__sherbertEditor && window.__sherbertEditor.ready',
+        timeout=30000,
+    )
+    assert page.evaluate('window.__sherbertEditor.nodeCount(0)') >= 1
+
+    context.close()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_cloud_annotation_persists_resizes_and_rerenders(browser, client, live_server, settings, tmp_path):
+    """Revision-cloud tool: drag a rect → POST 201 storing vertices[0] ==
+    [[x, y, w, h]] (four numbers); reload renders it; then select and resize it
+    → PUT with a changed rect."""
+    settings.MEDIA_ROOT = tmp_path
+    owner = User.objects.create_user('cloudowner', password='pw')
+    pdf_doc = PDFDocument(title='E2E Cloud Doc', user=owner)
+    pdf_doc.file.save('e2e_cloud.pdf', ContentFile(make_pdf_bytes()), save=True)
+
+    context, page = _open_editor(browser, client, live_server, settings, pdf_doc)
+
+    page.click('[data-tool="cloud"]')
+    canvas = page.locator('#sp-pages canvas').first
+    box = canvas.bounding_box()
+    assert box is not None
+    # Draw in the upper region so the bottom-right anchor stays well inside the
+    # scroll viewport (a cloud near the page bottom would put the anchor below it).
+    sx = box['x'] + box['width'] * 0.15
+    sy = box['y'] + box['height'] * 0.12
+    ex = box['x'] + box['width'] * 0.5
+    ey = box['y'] + box['height'] * 0.32
+    with page.expect_response(
+        lambda r: '/api/annotations' in r.url and r.request.method == 'POST' and r.status == 201,
+        timeout=15000,
+    ):
+        page.mouse.move(sx, sy)
+        page.mouse.down()
+        page.mouse.move(ex, ey, steps=8)
+        page.mouse.up()
+
+    annotation = PDFAnnotation.objects.get(annotation_type='cloud')
+    verts = annotation.pen_data.vertices
+    # New storage format: a single 4-number rect entry.
+    assert len(verts) == 1 and len(verts[0]) == 1 and len(verts[0][0]) == 4, verts
+    orig_rect = list(verts[0][0])
+    assert orig_rect[2] > 0 and orig_rect[3] > 0
+
+    # Reload renders the cloud.
+    page.reload()
+    page.wait_for_function(
+        'window.__sherbertEditor && window.__sherbertEditor.ready',
+        timeout=30000,
+    )
+    assert page.evaluate('window.__sherbertEditor.nodeCount(0)') >= 1
+
+    # Select the cloud and drag its bottom-right anchor outward → PUT.
+    assert page.evaluate("() => window.__sherbertEditor.selectFirst(0, 'cloud')")
+    page.wait_for_function(
+        "() => window.__sherbertEditor.anchorRect('bottom-right') !== null",
+        timeout=5000,
+    )
+    cr = page.evaluate("() => window.__sherbertEditor.anchorRect('bottom-right')")
+    with page.expect_response(
+        lambda r: '/api/annotations' in r.url and r.request.method == 'PUT',
+        timeout=15000,
+    ) as put_info:
+        page.mouse.move(cr['centerX'], cr['centerY'])
+        page.mouse.down()
+        page.mouse.move(cr['centerX'] + 70, cr['centerY'] + 70, steps=8)
+        page.mouse.up()
+    assert put_info.value.ok
+
+    annotation.pen_data.refresh_from_db()
+    new_rect = annotation.pen_data.vertices[0][0]
+    assert len(new_rect) == 4
+    # The rect grew (width and/or height increased).
+    assert new_rect[2] > orig_rect[2] - 1 or new_rect[3] > orig_rect[3] - 1
+    assert new_rect != orig_rect
+
+    context.close()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_eraser_persists_erasures_on_pen_stroke(browser, client, live_server, settings, tmp_path):
+    """Eraser tool: draw a pen stroke, drag the eraser across it → a PUT
+    persists non-empty erasure circles on the pen annotation; reload keeps it."""
+    settings.MEDIA_ROOT = tmp_path
+    owner = User.objects.create_user('eraserowner', password='pw')
+    pdf_doc = PDFDocument(title='E2E Eraser Doc', user=owner)
+    pdf_doc.file.save('e2e_eraser.pdf', ContentFile(make_pdf_bytes()), save=True)
+
+    context, page = _open_editor(browser, client, live_server, settings, pdf_doc)
+
+    # Draw a pen stroke.
+    page.click('[data-tool="pen"]')
+    canvas = page.locator('#sp-pages canvas').first
+    box = canvas.bounding_box()
+    assert box is not None
+    start_x, start_y = box['x'] + box['width'] * 0.3, box['y'] + box['height'] * 0.5
+    with page.expect_response(
+        lambda r: '/api/annotations' in r.url and r.request.method == 'POST' and r.status == 201,
+        timeout=15000,
+    ):
+        page.mouse.move(start_x, start_y)
+        page.mouse.down()
+        for i in range(1, 8):
+            page.mouse.move(start_x + i * 20, start_y)
+        page.mouse.up()
+
+    annotation = PDFAnnotation.objects.get(annotation_type='pen')
+    assert annotation.pen_data.erasures == []
+
+    # Erase by dragging along the same horizontal path.
+    page.click('[data-tool="eraser"]')
+    with page.expect_response(
+        lambda r: '/api/annotations' in r.url and r.request.method == 'PUT',
+        timeout=15000,
+    ) as put_info:
+        page.mouse.move(start_x, start_y)
+        page.mouse.down()
+        for i in range(1, 8):
+            page.mouse.move(start_x + i * 20, start_y)
+        page.mouse.up()
+    assert put_info.value.ok
+
+    annotation.pen_data.refresh_from_db()
+    assert annotation.pen_data.erasures, 'eraser did not persist any erasure circles'
+    first = annotation.pen_data.erasures[0]
+    assert {'cx', 'cy', 'r'} <= set(first.keys())
+
+    page.reload()
+    page.wait_for_function(
+        'window.__sherbertEditor && window.__sherbertEditor.ready',
+        timeout=30000,
+    )
+    assert page.evaluate('window.__sherbertEditor.nodeCount(0)') >= 1
+
+    context.close()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_signature_annotation_uses_cursive_font(browser, client, live_server, settings, tmp_path):
+    """Signature tool: the same overlay flow as text, saved as a text annotation
+    whose font_family contains 'cursive' (export renders it italic)."""
+    settings.MEDIA_ROOT = tmp_path
+    owner = User.objects.create_user('sigowner', password='pw')
+    pdf_doc = PDFDocument(title='E2E Signature Doc', user=owner)
+    pdf_doc.file.save('e2e_sig.pdf', ContentFile(make_pdf_bytes()), save=True)
+
+    context, page = _open_editor(browser, client, live_server, settings, pdf_doc)
+
+    page.click('[data-tool="signature"]')
+    canvas = page.locator('#sp-pages canvas').first
+    box = canvas.bounding_box()
+    assert box is not None
+    page.mouse.click(box['x'] + box['width'] * 0.3, box['y'] + box['height'] * 0.4)
+
+    page.wait_for_selector('.sp-text-overlay', timeout=5000)
+    page.wait_for_function(
+        "document.activeElement && document.activeElement.classList.contains('sp-text-overlay')",
+        timeout=5000,
+    )
+    page.keyboard.type('Jane Doe')
+    with page.expect_response(
+        lambda r: '/api/annotations' in r.url and r.request.method == 'POST' and r.status == 201,
+        timeout=15000,
+    ):
+        page.keyboard.press('Enter')
+
+    annotation = PDFAnnotation.objects.get(annotation_type='text')
+    assert annotation.text_data.content == 'Jane Doe'
+    assert 'cursive' in annotation.text_data.font_family.lower()
+
+    context.close()

@@ -200,6 +200,19 @@ def export_pdf(pdf_document):
                 base_dir = getattr(settings, 'BASE_DIR', None)
 
                 candidates = []
+                # In development (no collectstatic run) app-static images such as
+                # the packaged stamps live only inside their app's static/ dir, so
+                # resolve them through the staticfiles finders FIRST. Guarded: the
+                # finders framework is only available when django.contrib.staticfiles
+                # is installed.
+                try:
+                    from django.contrib.staticfiles import finders
+
+                    found = finders.find(url_path)
+                    if found:
+                        candidates.append(found)
+                except Exception:
+                    pass
                 if static_root:
                     candidates.append(os.path.join(static_root, url_path))
                 if base_dir:

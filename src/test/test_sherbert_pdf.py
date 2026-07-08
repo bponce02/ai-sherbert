@@ -178,6 +178,48 @@ def test_export_pdf_smoke(document, settings, tmp_path):
 
 
 @pytest.mark.django_db
+def test_export_stamp_resolves_package_static_via_finders(document, settings, tmp_path):
+    """A stamp whose imageUrl points at a package-static image (as shipped by
+    SHERBERT_PDF_STAMPS / default_stamps) must export in development where no
+    collectstatic has run: the staticfiles finders resolve it. The exported
+    page must then carry the embedded image."""
+    settings.MEDIA_ROOT = tmp_path
+
+    pdf_dir = tmp_path / 'pdfs'
+    pdf_dir.mkdir()
+    src = pymupdf.open()
+    src.new_page(width=612, height=792)
+    src.save(pdf_dir / 'stamp_source.pdf')
+    src.close()
+    document.file.name = 'pdfs/stamp_source.pdf'
+    document.save()
+
+    from django.templatetags.static import static
+
+    stamp_url = static('sherbert_pdf/stamps/approved.png')
+    assert stamp_url.endswith('sherbert_pdf/stamps/approved.png')
+
+    annotation = PDFAnnotation.objects.create(
+        pdf_document=document,
+        page_number=0,
+        annotation_type='stamp',
+    )
+    StampAnnotationData.objects.create(
+        annotation=annotation,
+        x=100.0, y=150.0, width=120.0, height=48.0,
+        image_url=stamp_url,
+    )
+
+    pdf_bytes = export_pdf(document)
+    assert pdf_bytes.startswith(b'%PDF')
+
+    result = pymupdf.open(stream=pdf_bytes, filetype='pdf')
+    page = result[0]
+    assert page.get_images(), 'stamp image was not embedded into the exported page'
+    result.close()
+
+
+@pytest.mark.django_db
 def test_pdfdocument_export_method(document, settings, tmp_path):
     settings.MEDIA_ROOT = tmp_path
     pdf_dir = tmp_path / 'pdfs'
