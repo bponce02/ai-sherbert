@@ -40,6 +40,18 @@ const COLORS = {
 const HIGHLIGHT_OPACITY = 0.3;
 const EDITABLE_TYPES = ['pen', 'highlighter', 'text'];
 
+/* Transformer anchor sets per node type. Text: corners scale font
+ * proportionally (keepRatio), middle-left/right adjust the wrap-box WIDTH, and
+ * middle-top/bottom are disabled (text height is derived from wrapping, so
+ * stretching it has no data-model meaning). Lines: all eight anchors, free
+ * (non-uniform) stretch — legitimate for pen/highlighter strokes. */
+const TEXT_ANCHORS = ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'middle-left', 'middle-right'];
+const LINE_ANCHORS = [
+  'top-left', 'top-center', 'top-right',
+  'middle-left', 'middle-right',
+  'bottom-left', 'bottom-center', 'bottom-right',
+];
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -409,7 +421,7 @@ function materialize(page, record) {
     });
   } else if (type === 'text') {
     const rect = data.rect || [0, 0, 100, 30];
-    node = new Konva.Text({
+    const attrs = {
       x: rect[0],
       y: rect[1],
       text: data.content || '',
@@ -417,7 +429,13 @@ function materialize(page, record) {
       fontFamily: data.fontFamily || 'Arial, sans-serif',
       fontStyle: data.fontStyle === 'italic' ? 'italic' : 'normal',
       fill: rgbToCss(data.colors && data.colors.stroke),
-    });
+    };
+    // Round-trip the stored box width so text wraps exactly as the server-side
+    // PyMuPDF export (insert_htmlbox flows the content into this rect). Without
+    // an explicit width, wrapped annotations would render on a single line.
+    const boxWidth = rect[2] - rect[0];
+    if (boxWidth > 0) attrs.width = boxWidth;
+    node = new Konva.Text(attrs);
   } else if (type === 'cloud') {
     // Read-only in v1.
     const seg = (data.vertices && data.vertices[0]) || [];
@@ -795,16 +813,44 @@ async function commitText(page, posPts, raw, existingNode, fontSize, colorCss) {
 // Select tool: Transformer + drag-to-move; bake transforms into geometry
 // ---------------------------------------------------------------------------
 
+/* Point the shared Transformer at the anchor set / keepRatio appropriate for
+ * the node type being selected (text vs. line). Called on every select so the
+ * config always matches the current selection, and reset on deselect. */
+function configureTransformer(transformer, node) {
+  if (node instanceof Konva.Text) {
+    transformer.setAttrs({ enabledAnchors: TEXT_ANCHORS, keepRatio: true });
+  } else {
+    transformer.setAttrs({ enabledAnchors: LINE_ANCHORS, keepRatio: false });
+  }
+}
+
+/* Live handler during a text transform: for the middle-left/right anchors,
+ * fold the horizontal scale into the box WIDTH (text reflows/wraps live) and
+ * reset the scale so width changes accumulate without ever scaling the font.
+ * Corner anchors are left alone here — their proportional scale is baked into
+ * fontSize at transformend by bakeAndSave. */
+function reflowTextDuringTransform(transformer, node) {
+  if (!(node instanceof Konva.Text)) return;
+  const anchor = transformer.getActiveAnchor();
+  if (anchor === 'middle-left' || anchor === 'middle-right') {
+    node.width(Math.max(30, node.width() * node.scaleX()));
+    node.scaleX(1);
+    node.scaleY(1);
+  }
+}
+
 function select(page, node) {
   if (state.selected === node) return;
   deselect();
   state.selected = node;
   node.draggable(true);
+  configureTransformer(page.transformer, node);
   page.transformer.nodes([node]);
   page.transformer.moveToTop();
   page.annLayer.batchDraw();
 
   node.on('dragend.spsel transformend.spsel', () => bakeAndSave(page, node));
+  node.on('transform.spsel', () => reflowTextDuringTransform(page.transformer, node));
   node.on('dragmove.spsel transform.spsel', () => positionDeleteButton(page, node));
   positionDeleteButton(page, node);
 }
@@ -820,6 +866,9 @@ function deselect() {
       page.transformer.nodes([]);
       page.annLayer.batchDraw();
     }
+    // Restore the free-stretch line config so a stale text config never leaks
+    // into the next selection before configureTransformer runs.
+    page.transformer.setAttrs({ enabledAnchors: LINE_ANCHORS, keepRatio: false });
   }
   deleteBtn.style.display = 'none';
 }
@@ -859,10 +908,19 @@ async function bakeAndSave(page, node) {
     meta.data.vertices = [flatToPairs(baked)];
     meta.data.border = { width: newWidth };
   } else if (node instanceof Konva.Text) {
-    const newFontSize = Math.max(1, Math.round(node.fontSize() * sy));
-    node.fontSize(newFontSize);
-    node.scale({ x: 1, y: 1 });
-    meta.data.fontSize = newFontSize;
+    // Two transform paths land here:
+    //  - Middle-left/right (width) drags were baked live by
+    //    reflowTextDuringTransform, which leaves scaleX == scaleY == 1, so the
+    //    fontSize is untouched and only the reflowed width/rect is persisted.
+    //  - Corner drags keep ratio (scaleX == scaleY == scale) and are baked now:
+    //    scale BOTH the font AND the box width proportionally so the wrap stays
+    //    visually identical while the whole annotation grows/shrinks.
+    if (sx !== 1 || sy !== 1) {
+      node.fontSize(Math.max(1, Math.round(node.fontSize() * sy)));
+      node.width(Math.max(30, node.width() * sx));
+      node.scale({ x: 1, y: 1 });
+    }
+    meta.data.fontSize = node.fontSize();
     meta.data.rect = [node.x(), node.y(), node.x() + node.width(), node.y() + node.height()];
   } else {
     return;
@@ -1301,6 +1359,38 @@ window.__sherbertEditor = {
   bitmapScale(pageIndex) {
     const page = state.pages[pageIndex];
     return page ? page.bitmapScale : null;
+  },
+  /* Client-rect (viewport pixels) of the named Transformer anchor for the
+   * current selection, e.g. 'middle-right' or 'bottom-right'. Returns the
+   * center too, for driving a mouse drag from the anchor. */
+  anchorRect(name) {
+    const node = state.selected;
+    if (!node) return null;
+    const found = findNode(getMeta(node).id);
+    if (!found) return null;
+    const anchor = found.page.transformer.findOne('.' + name);
+    if (!anchor) return null;
+    const r = anchor.getClientRect(); // container pixels (includes stage scale)
+    const cont = found.page.stage.container().getBoundingClientRect();
+    return {
+      x: cont.left + r.x,
+      y: cont.top + r.y,
+      width: r.width,
+      height: r.height,
+      centerX: cont.left + r.x + r.width / 2,
+      centerY: cont.top + r.y + r.height / 2,
+    };
+  },
+  /* Konva box width (PDF points) of the first text node on a page — used to
+   * assert stored wrap widths round-trip through a reload. */
+  textNodeWidth(pageIndex) {
+    const page = state.pages[pageIndex];
+    if (!page) return null;
+    const node = page.annLayer.getChildren((n) => {
+      const meta = getMeta(n);
+      return meta && meta.type === 'text';
+    })[0];
+    return node ? node.width() : null;
   },
   setTool,
 };

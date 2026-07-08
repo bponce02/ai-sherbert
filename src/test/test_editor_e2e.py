@@ -175,6 +175,130 @@ def test_text_annotation_persists_and_rerenders(browser, client, live_server, se
     context.close()
 
 
+def _text_node_screen_box(page):
+    """Screen-pixel bounding box of the first text node on page 0."""
+    return page.evaluate(
+        """() => {
+            const p0 = window.__sherbertEditor.state.pages[0];
+            const n = p0.annLayer.getChildren((x) => {
+                const m = x.getAttr('sherbert');
+                return m && m.type === 'text';
+            })[0];
+            if (!n) return null;
+            const r = n.getClientRect();
+            const cont = p0.stage.container().getBoundingClientRect();
+            return { x: cont.left + r.x, y: cont.top + r.y, w: r.width, h: r.height };
+        }"""
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_text_side_resize_wraps_and_corner_resize_scales_font(
+    browser, client, live_server, settings, tmp_path
+):
+    """Text annotations resize per-anchor: middle-right adjusts the wrap-box
+    WIDTH (font unchanged), corner anchors scale the font proportionally, and
+    the stored width round-trips through a reload."""
+    settings.MEDIA_ROOT = tmp_path
+    owner = User.objects.create_user('resizeowner', password='pw')
+    pdf_doc = PDFDocument(title='E2E Text Resize Doc', user=owner)
+    pdf_doc.file.save('e2e_resize.pdf', ContentFile(make_pdf_bytes()), save=True)
+
+    context, page = _open_editor(browser, client, live_server, settings, pdf_doc)
+
+    # Create a long-sentence text annotation (auto width => a wide single line).
+    page.click('[data-tool="text"]')
+    canvas = page.locator('#sp-pages canvas').first
+    box = canvas.bounding_box()
+    assert box is not None
+    click_x = box['x'] + box['width'] * 0.2
+    click_y = box['y'] + box['height'] * 0.3
+    page.mouse.click(click_x, click_y)
+    page.wait_for_selector('.sp-text-overlay', timeout=5000)
+    page.wait_for_function(
+        "document.activeElement && document.activeElement.classList.contains('sp-text-overlay')",
+        timeout=5000,
+    )
+    page.keyboard.type('The quick brown fox jumps over the lazy dog')
+    with page.expect_response(
+        lambda r: '/api/annotations' in r.url and r.request.method == 'POST' and r.status == 201,
+        timeout=15000,
+    ):
+        page.keyboard.press('Enter')
+
+    annotation = PDFAnnotation.objects.get(annotation_type='text')
+    td = annotation.text_data
+    orig_width = td.rect_x2 - td.rect_x1
+    orig_font = td.font_size
+    assert orig_width > 0
+
+    # Switch to select and click the text node to attach the Transformer.
+    page.click('[data-tool="select"]')
+    node_box = _text_node_screen_box(page)
+    assert node_box is not None
+    page.mouse.click(node_box['x'] + 8, node_box['y'] + node_box['h'] * 0.4)
+    # Transformer anchors exist once the node is selected.
+    page.wait_for_function(
+        "() => window.__sherbertEditor.anchorRect('middle-right') !== null",
+        timeout=5000,
+    )
+
+    # --- Side resize: drag middle-right inward ~40% of the box width. ---
+    ar = page.evaluate("() => window.__sherbertEditor.anchorRect('middle-right')")
+    drag_dx = node_box['w'] * 0.4
+    with page.expect_response(
+        lambda r: '/api/annotations' in r.url and r.request.method == 'PUT',
+        timeout=15000,
+    ) as put_info:
+        page.mouse.move(ar['centerX'], ar['centerY'])
+        page.mouse.down()
+        page.mouse.move(ar['centerX'] - drag_dx, ar['centerY'], steps=8)
+        page.mouse.up()
+    assert put_info.value.ok
+
+    td.refresh_from_db()
+    side_width = td.rect_x2 - td.rect_x1
+    assert side_width < orig_width - 1, (
+        f'side resize did not shrink width: {side_width} vs {orig_width}'
+    )
+    assert td.font_size == orig_font, (
+        f'side resize changed font size: {td.font_size} vs {orig_font}'
+    )
+
+    # --- Corner resize: drag bottom-right outward => font grows. ---
+    cr = page.evaluate("() => window.__sherbertEditor.anchorRect('bottom-right')")
+    with page.expect_response(
+        lambda r: '/api/annotations' in r.url and r.request.method == 'PUT',
+        timeout=15000,
+    ) as put_info2:
+        page.mouse.move(cr['centerX'], cr['centerY'])
+        page.mouse.down()
+        page.mouse.move(cr['centerX'] + 90, cr['centerY'] + 120, steps=8)
+        page.mouse.up()
+    assert put_info2.value.ok
+
+    td.refresh_from_db()
+    assert td.font_size > orig_font, (
+        f'corner resize did not grow font: {td.font_size} vs {orig_font}'
+    )
+    stored_width = td.rect_x2 - td.rect_x1
+
+    # --- Reload: the persisted box width must round-trip onto the Konva node. ---
+    page.reload()
+    page.wait_for_function(
+        'window.__sherbertEditor && window.__sherbertEditor.ready',
+        timeout=30000,
+    )
+    assert page.evaluate('window.__sherbertEditor.nodeCount(0)') >= 1
+    node_width = page.evaluate('window.__sherbertEditor.textNodeWidth(0)')
+    assert node_width is not None
+    assert abs(node_width - stored_width) <= 2, (
+        f'reloaded text width {node_width} != stored {stored_width}'
+    )
+
+    context.close()
+
+
 @pytest.mark.django_db(transaction=True)
 def test_max_zoom_caps_canvas_backing_store(browser, client, live_server, settings, tmp_path):
     """At max zoom the Konva scene-canvas backing store must stay within the
