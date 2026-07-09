@@ -1,0 +1,10 @@
+# orange-sherbert
+
+> Two reusable Django apps in one wheel (Python >=3.12, Django >=5.2). `orange_sherbert`: declarative CRUD views (subclass `CRUDView`, call `get_urls()`) with HTMX inline formsets, search/filter/sort, multi-column form layouts, and per-field widget styling; Tailwind + DaisyUI templates; requires django-htmx. `sherbert_pdf` (optional extra `orange-sherbert[pdf]`): PDF annotation backend + Konva.js editor, mountable Django-Ninja router, pluggable access policy, and PyMuPDF export.
+
+## Docs
+
+- [README](README.md): What the package is, install (git+https), INSTALLED_APPS + middleware, per-app quickstart, settings table, running the example project and tests.
+- [orange_sherbert reference](docs/orange-sherbert.md): Full `CRUDView` reference — every class attribute (fields, form_fields, form_layout, inline_formsets, restricted_fields, extra_actions, field_widths/cell_css, URL wiring), parent-view hooks and their signatures, field widgets and `ORANGE_SHERBERT_FIELD_WIDGETS`, list-page behaviors, and template tags.
+- [sherbert_pdf reference](docs/sherbert-pdf.md): Full `sherbert_pdf` reference — models and annotation payload shapes, every REST endpoint with schemas/status codes, router mounting + auth, access policy (`SHERBERT_PDF_ACCESS_POLICY`), the editor (`EditorView`, URL name, CDN deps), stamps (`SHERBERT_PDF_STAMPS`), PyMuPDF export, and editor capabilities/limitations.
+</content>
