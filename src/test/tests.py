@@ -1,6 +1,10 @@
 import pytest
 from datetime import date
 from decimal import Decimal
+
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
+
 from example.models import Author, Book
 
 
@@ -45,6 +49,64 @@ def test_all_views_return_200(client, author, book, url_template, needs_object):
     
     response = client.get(url)
     assert response.status_code == 200
+
+
+@pytest.fixture
+def check_out_perm(db):
+    return Permission.objects.get(
+        content_type__app_label='example', codename='can_check_out'
+    )
+
+
+def _make_user(username, perms=()):
+    user = get_user_model().objects.create_user(username, password='pw')
+    for perm in perms:
+        user.user_permissions.add(perm)
+    # Re-fetch to clear the cached permission set.
+    return get_user_model().objects.get(pk=user.pk)
+
+
+@pytest.mark.django_db
+def test_extra_action_without_permission_is_forbidden(client, book, check_out_perm):
+    """The 'check-out' action carries permission 'example.can_check_out'.
+    A user lacking it gets a 403 from the action URL."""
+    client.force_login(_make_user('nobody'))
+    response = client.post(f'/book/{book.pk}/check-out/')
+    assert response.status_code == 403
+    book.refresh_from_db()
+    assert book.checked_out is False
+
+
+@pytest.mark.django_db
+def test_extra_action_with_permission_runs(client, book, check_out_perm):
+    client.force_login(_make_user('checker', perms=[check_out_perm]))
+    response = client.post(f'/book/{book.pk}/check-out/')
+    assert response.status_code == 302  # CheckOutView redirects on success
+    book.refresh_from_db()
+    assert book.checked_out is True
+
+
+@pytest.mark.django_db
+def test_extra_action_without_permission_still_allows_unrestricted_action(client, book):
+    """Actions without a 'permission' key (e.g. 'check-in') stay open to all."""
+    client.force_login(_make_user('nobody2'))
+    response = client.post(f'/book/{book.pk}/check-in/')
+    assert response.status_code == 302
+
+
+@pytest.mark.django_db
+def test_extra_action_button_hidden_without_permission(client, book, check_out_perm):
+    client.force_login(_make_user('viewer'))
+    content = client.get('/book/').content.decode()
+    assert '/check-out/' not in content   # gated button hidden
+    assert '/check-in/' in content        # ungated button still shown
+
+
+@pytest.mark.django_db
+def test_extra_action_button_shown_with_permission(client, book, check_out_perm):
+    client.force_login(_make_user('viewer2', perms=[check_out_perm]))
+    content = client.get('/book/').content.decode()
+    assert '/check-out/' in content
 
 
 @pytest.mark.django_db

@@ -212,6 +212,7 @@ def update_annotation(request, data: AnnotationUpdate):
         text_data.rect_y2 = annot_data.rect[3]
         text_data.content = annot_data.content
         text_data.font_size = annot_data.fontSize
+        text_data.font_family = annot_data.fontFamily
         text_data.font_style = annot_data.fontStyle
         text_data.save()
     elif annotation.annotation_type == 'stamp':

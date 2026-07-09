@@ -213,6 +213,21 @@ def test_update_pen_annotation(client, pdf_doc):
 
 
 @pytest.mark.django_db
+def test_update_text_annotation_persists_font_family(client, pdf_doc):
+    annotation_id = create_annotation(client, pdf_doc, 'text').json()['id']
+
+    updated = dict(ANNOTATION_PAYLOADS['text'])
+    updated['content'] = 'Signed'
+    updated['fontFamily'] = 'Arial, cursive'
+    response = put_annotation(client, annotation_id, updated)
+    assert response.status_code == 204
+
+    annotation = PDFAnnotation.objects.select_related('text_data').get(id=annotation_id)
+    assert annotation.text_data.font_family == 'Arial, cursive'
+    assert annotation.text_data.content == 'Signed'
+
+
+@pytest.mark.django_db
 def test_delete_annotation(client, pdf_doc):
     annotation_id = create_annotation(client, pdf_doc, 'pen').json()['id']
 

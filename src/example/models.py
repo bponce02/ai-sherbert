@@ -19,6 +19,7 @@ class Book(models.Model):
         verbose_name_plural = 'Books'
         permissions = [
             ('can_view_ordered_from', 'Can view ordered from field'),
+            ('can_check_out', 'Can check out a book'),
         ]
     
     def __str__(self):

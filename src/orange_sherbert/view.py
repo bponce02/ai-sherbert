@@ -12,6 +12,22 @@ from django.template.loader import render_to_string
 from django.forms.models import BaseInlineFormSet
 from django.forms.models import inlineformset_factory
 
+def _permission_required(permission, view):
+    """Wrap an extra-action view so a user lacking ``permission`` gets an
+    HttpResponseForbidden (mirroring how ``enforce_model_permissions`` responds
+    in ``CRUDView.dispatch``). The wrapped view is otherwise called unchanged,
+    so CSRF handling and view kwargs are preserved."""
+    from functools import wraps
+
+    @wraps(view)
+    def _wrapped(request, *args, **kwargs):
+        if not request.user.has_perm(permission):
+            return HttpResponseForbidden("You do not have permission to perform this action.")
+        return view(request, *args, **kwargs)
+
+    return _wrapped
+
+
 class NestedInlineFormSet(BaseInlineFormSet):
     parent_formset_name = None
     children = []
@@ -897,9 +913,13 @@ class CRUDView(View):
             for action in cls.extra_actions:
                 action_name = action['name']
                 view_class = action['view']
+                permission = action.get('permission')
 
                 url_name = f"{name_base}-{action_name}"
                 url_path = f'{url_base}/<{pk_type}:pk>/{action_name}/'
-                urls.append(path(url_path, view_class.as_view(), name=url_name))
+                action_view = view_class.as_view()
+                if permission:
+                    action_view = _permission_required(permission, action_view)
+                urls.append(path(url_path, action_view, name=url_name))
 
         return urls

@@ -101,7 +101,7 @@ class BookCRUDView(CRUDView):
             "label": "Check Out",
             "view": CheckOutView,
             "method": "POST",
-            #'permission': 'can_check_out'
+            "permission": "example.can_check_out",
         },
     ]
 

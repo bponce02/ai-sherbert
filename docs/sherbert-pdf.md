@@ -110,7 +110,9 @@ points** in the page coordinate space.
 - `opacity` — `0.0–1.0`, default `1.0`. (On export, highlighter opacity is
   forced to `0.3` regardless of this value.)
 - `erasures` — optional; list of `{cx, cy, r}` circles. Only meaningful for
-  pen/highlighter. See the [export caveat](#export).
+  pen/highlighter (a `cloud` may carry them too, and they are applied the same
+  way). They are subtracted from the exported stroke geometry — see
+  [Export](#export).
 
 **Cloud "new format":** a revision cloud is stored as a **single bounding rect**
 `[x, y, w, h]` placed at `vertices[0][0]`, i.e. `vertices == [[[x, y, w, h]]]`
@@ -136,9 +138,8 @@ accepted and drawn as-is.
 - `fontSize` — int `>= 1`, default `16`.
 - `fontFamily` default `'Arial, sans-serif'`; `fontStyle` default `'normal'`.
 - On export, a cursive/script `fontFamily` is rendered italic (signature
-  styling). Note: the create endpoint persists `fontFamily`, but the **update**
-  endpoint does not re-save `fontFamily` (it updates rect/content/size/style
-  only).
+  styling). Both the create **and** update endpoints persist `fontFamily`, so a
+  signature edited after creation keeps its cursive family.
 
 ### Stamp — `StampAnnotationData`
 
@@ -367,8 +368,8 @@ PyMuPDF, then `tobytes(garbage=4, deflate=True)`. Rendering per type:
 
 | Type | How it renders (PyMuPDF) |
 |---|---|
-| `pen` | `add_ink_annot` from `vertices[0]`; stroke color, border width, opacity applied. |
-| `highlighter` | Same as pen, but **opacity forced to `0.3`**. |
+| `pen` | `add_ink_annot` from `vertices[0]`; stroke color, border width, opacity applied. Erasure circles are subtracted first (see below). |
+| `highlighter` | Same as pen, but **opacity forced to `0.3`**. Erasures are subtracted geometrically; the editor's multiply-blend look is not reproduced (see below). |
 | `text` | `insert_htmlbox` into `rect` with an HTML snippet (color, size, weight, line-height); cursive/script font → italic. |
 | `stamp` | `insert_image` into `[x, y, x+width, y+height]` from the resolved image file. |
 | `cloud` | New format `[x,y,w,h]` → scalloped outline via `add_ink_annot`; legacy point-list drawn directly. |
@@ -382,10 +383,21 @@ trying, in order: strip scheme/host and the `STATIC_URL` prefix, then look up vi
 stamps resolve in development without `collectstatic`), (2) `STATIC_ROOT`, (3)
 `BASE_DIR/static/`. If none exist, the stamp is skipped and a warning is logged.
 
-> **Export caveat (verified in source):** the export code for pen/highlighter/
-> cloud reads `vertices`, `colors`, `border`, and `opacity` but **does not apply
-> `erasures`**. Eraser holes are stored on the annotation and rendered live in
-> the editor, but they are **not** subtracted from the exported PDF.
+**Erasures on export.** Eraser holes stored on a pen/highlighter (or cloud)
+annotation **are** applied to the exported PDF. `_apply_erasures` walks each
+polyline segment by segment and removes the spans that fall inside any erasure
+circle using exact line-circle intersection: a segment `A→B` is a parametric
+line `X(t)=A+t(B−A)`, and the inside-circle spans are the roots of the quadratic
+`|X(t)−C|² ≤ r²`; those spans are cut and the surviving spans are stitched back
+into continuous sub-strokes. All surviving sub-strokes of one annotation go into
+a **single** `add_ink_annot` call (one ink annotation with multiple strokes); an
+annotation whose geometry is entirely erased produces **no** ink annotation.
+
+> **Highlighter blend nuance:** the export subtracts erased geometry exactly,
+> but it does not reproduce the editor's live look — highlighters in the editor
+> are drawn with `globalCompositeOperation: 'multiply'` and the eraser punches
+> soft `destination-out` holes inside a cached group. The exported PDF instead
+> carries flat ink strokes at `0.3` opacity with the erased spans removed.
 
 ## Editor capabilities and limitations
 
@@ -414,9 +426,11 @@ Known limitations (verified in source):
 - **Eraser only affects the current user's own pen/highlighter strokes**
   (`meta.isOwner` and stroke type are checked); it cannot erase text, stamps,
   clouds, or other users' strokes.
-- **Erased-highlighter blend:** highlighters are drawn with
+- **Erased-highlighter blend is editor-only.** Highlighters are drawn with
   `globalCompositeOperation: 'multiply'` at `0.3` opacity in the editor, and the
-  eraser punches `destination-out` holes inside a cached group. Erasures are a
-  live-editor effect only and, as noted above, **do not appear in the exported
-  PDF**.
+  eraser punches soft `destination-out` holes inside a cached group. The
+  erasures themselves **are** applied to the exported PDF (the covered stroke
+  geometry is removed — see [Export](#export)), but the multiply-blend and
+  feathered-hole appearance is a live-editor effect that the flat exported ink
+  strokes do not reproduce.
 </content>

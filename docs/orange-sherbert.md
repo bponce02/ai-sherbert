@@ -283,7 +283,7 @@ each. Each entry:
 | `view` | yes | A view **class** (`.as_view()` is called). |
 | `label` | yes (for the button) | Button text on the list page. |
 | `method` | yes (for the button) | `"GET"` → renders an `<a>`; anything else → a POST `<form>` with CSRF. |
-| `permission` | optional | **Currently NOT enforced** by the package (see note). |
+| `permission` | optional | `app_label.codename` string; enforced on both the URL and the button (see note). |
 
 ```python
 class OrderOnlineView(View):
@@ -301,10 +301,35 @@ class BookCRUDView(CRUDView):
 This generates the URL `book/<int:pk>/order-online/` named `book-order-online`.
 The action view receives `pk` as a URL kwarg.
 
-> **Note (verified against source):** the `permission` key is accepted in the
-> config dict but is **not checked anywhere** in `orange_sherbert` — neither
-> `get_urls()` nor the list template gate on it. Enforce permissions inside your
-> action view (e.g. `PermissionRequiredMixin`) if you need it.
+### Action permissions
+
+An action may carry a `permission` key (an `app_label.codename` string). When
+set, it is enforced in two places:
+
+- **URL** — `get_urls()` wraps the action view so a request from a user lacking
+  the permission (`request.user.has_perm(permission)`) gets an
+  `HttpResponseForbidden` before the action view runs. The wrapper is
+  transparent otherwise: the action view's own kwargs and CSRF handling are
+  unchanged.
+- **List button** — the action's button/form is only rendered for users who
+  hold the permission (via the `has_perm` template tag in `sherbert_tags`).
+
+Actions **without** a `permission` key remain visible and callable by everyone
+(backward compatible). Because the check uses `has_perm`, a superuser passes all
+permission gates as usual.
+
+```python
+class BookCRUDView(CRUDView):
+    model = Book
+    extra_actions = [
+        {"name": "check-out", "view": CheckOutView, "label": "Check Out",
+         "method": "POST", "permission": "example.can_check_out"},
+    ]
+```
+
+The permission is checked at the action layer only; the standard list/detail/
+create/update/delete views are gated separately by
+[`enforce_model_permissions`](#enforce_model_permissions).
 
 ## `field_widths` and `cell_css`
 
@@ -624,4 +649,5 @@ Load with `{% load sherbert_tags %}`. Available in
 | `get_field_options` (tag) | `{% get_field_options queryset_or_view field_name %}` | List of `(value, label)` distinct options for filter dropdowns; handles choices, relations (`str(obj)`), and `__`-spanning lookups. Called on an object exposing `.model`. |
 | `is_selected` (tag) | `{% is_selected option request field %}` | `'selected'` if `str(option) == request.GET[field]`, else `''`. |
 | `get_verbose_name` (tag) | `{% get_verbose_name object 'author' %}` | The field's `verbose_name`; falls back to a title-cased field name if the field doesn't exist. |
+| `has_perm` (tag) | `{% has_perm user action.permission as allowed %}` | `user.has_perm(permission)`; a falsy/empty permission returns `True` (no restriction). Used to gate `extra_actions` buttons. |
 </content>

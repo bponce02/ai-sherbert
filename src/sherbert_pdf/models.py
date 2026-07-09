@@ -84,6 +84,106 @@ ANNOTATION_TYPES = [
 ]
 
 
+def _segment_inside_intervals(ax, ay, bx, by, erasures):
+    """Return sorted, merged parameter intervals ``[(t0, t1), ...]`` (t in
+    [0, 1]) of the segment A->B that fall *inside* any erasure circle.
+
+    A point X(t) = A + t*(B - A) is inside a circle (cx, cy, r) when
+    ``|X(t) - C|^2 <= r^2``, a quadratic in t whose roots bound the covered
+    span. Intervals from all circles are unioned so overlapping erasers merge.
+    """
+    dx, dy = bx - ax, by - ay
+    seg_len_sq = dx * dx + dy * dy
+    if seg_len_sq == 0:
+        return []
+
+    intervals = []
+    for e in erasures:
+        cx, cy, r = e['cx'], e['cy'], e['r']
+        if r <= 0:
+            continue
+        fx, fy = ax - cx, ay - cy
+        a = seg_len_sq
+        b = 2 * (fx * dx + fy * dy)
+        c = fx * fx + fy * fy - r * r
+        disc = b * b - 4 * a * c
+        if disc < 0:
+            continue  # segment never enters this circle
+        import math
+        sqrt_disc = math.sqrt(disc)
+        t_lo = (-b - sqrt_disc) / (2 * a)
+        t_hi = (-b + sqrt_disc) / (2 * a)
+        t_lo = max(0.0, min(1.0, t_lo))
+        t_hi = max(0.0, min(1.0, t_hi))
+        if t_hi > t_lo:
+            intervals.append((t_lo, t_hi))
+
+    if not intervals:
+        return []
+
+    intervals.sort()
+    merged = [intervals[0]]
+    for lo, hi in intervals[1:]:
+        last_lo, last_hi = merged[-1]
+        if lo <= last_hi:
+            merged[-1] = (last_lo, max(last_hi, hi))
+        else:
+            merged.append((lo, hi))
+    return merged
+
+
+def _apply_erasures(point_lists, erasures):
+    """Split each polyline in ``point_lists`` wherever it passes through any
+    erasure circle, dropping the covered spans.
+
+    Returns a new list of point-lists (the surviving sub-strokes). Each stroke
+    is walked segment by segment; the inside-circle spans are removed exactly
+    via line-circle intersection and the remaining outside spans are stitched
+    back into continuous polylines. Fragments with fewer than 2 points are
+    discarded.
+    """
+    if not erasures:
+        return point_lists
+
+    eps = 1e-9
+    result = []
+    for points in point_lists:
+        current = []
+        for i in range(len(points) - 1):
+            ax, ay = points[i][0], points[i][1]
+            bx, by = points[i + 1][0], points[i + 1][1]
+            inside = _segment_inside_intervals(ax, ay, bx, by, erasures)
+
+            # Outside intervals = [0, 1] minus the inside intervals.
+            outside = []
+            cursor = 0.0
+            for lo, hi in inside:
+                if lo - cursor > eps:
+                    outside.append((cursor, lo))
+                cursor = max(cursor, hi)
+            if 1.0 - cursor > eps:
+                outside.append((cursor, 1.0))
+
+            for t0, t1 in outside:
+                p0 = (ax + (bx - ax) * t0, ay + (by - ay) * t0)
+                p1 = (ax + (bx - ax) * t1, ay + (by - ay) * t1)
+                if current and t0 <= eps and abs(current[-1][0] - p0[0]) <= eps and abs(current[-1][1] - p0[1]) <= eps:
+                    current.append(p1)
+                else:
+                    if len(current) >= 2:
+                        result.append(current)
+                    current = [p0, p1]
+                if t1 < 1.0 - eps:
+                    # Segment re-enters a circle after this span: end the run.
+                    if len(current) >= 2:
+                        result.append(current)
+                    current = []
+        if len(current) >= 2:
+            result.append(current)
+
+    return result
+
+
 def export_pdf(pdf_document):
     """Render annotations from database onto PDF using MuPDF native methods"""
     pdf = pymupdf.open(pdf_document.file.path)
@@ -101,7 +201,13 @@ def export_pdf(pdf_document):
                     continue
 
                 points = [(pt[0], pt[1]) for pt in vertices[0]]
-                annot = page.add_ink_annot([points])
+
+                strokes = _apply_erasures([points], data.get('erasures', []))
+                if not strokes:
+                    # Every span was erased away — nothing left to draw.
+                    continue
+
+                annot = page.add_ink_annot(strokes)
 
                 colors = data.get('colors', {})
                 if 'stroke' in colors:
@@ -242,7 +348,12 @@ def export_pdf(pdf_document):
                     if len(rect) < 2:
                         continue
                     points = [(pt[0], pt[1]) for pt in rect]
-                annot = page.add_ink_annot([points])
+
+                strokes = _apply_erasures([points], data.get('erasures', []))
+                if not strokes:
+                    continue
+
+                annot = page.add_ink_annot(strokes)
 
                 colors = data.get('colors', {})
                 if 'stroke' in colors:

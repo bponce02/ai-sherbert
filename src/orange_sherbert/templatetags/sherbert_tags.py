@@ -19,6 +19,16 @@ def get_attr(obj, attr):
 
 
 @register.simple_tag
+def has_perm(user, permission):
+    """Return True if ``user`` holds ``permission`` (an ``app_label.codename``
+    string). Usage: ``{% has_perm user action.permission as allowed %}``.
+    An empty/None permission is treated as "no restriction" → True."""
+    if not permission:
+        return True
+    return user.has_perm(permission)
+
+
+@register.simple_tag
 def get_field_options(obj, field_name):
     model = obj.model
     

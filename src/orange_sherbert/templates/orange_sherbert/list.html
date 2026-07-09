@@ -113,13 +113,16 @@
                                     <a href="{% url url_namespace|add:model_name|add:'-update' item.object.pk %}?{{ request.GET.urlencode }}" class="btn btn-sm btn-ghost">Edit</a>
                                     <a href="{% url url_namespace|add:model_name|add:'-delete' item.object.pk %}?{{ request.GET.urlencode }}" class="btn btn-sm btn-ghost">Delete</a>
                                     {% for action in extra_actions %}
-                                        {% if action.method == 'GET' %}
-                                            <a href="{% url url_namespace|add:model_name|add:'-'|add:action.name item.object.pk %}" class="btn btn-sm btn-primary">{{ action.label }}</a>
-                                        {% else %}
-                                            <form method="post" action="{% url url_namespace|add:model_name|add:'-'|add:action.name item.object.pk %}" style="display: inline;">
-                                                {% csrf_token %}
-                                                <button type="submit" class="btn btn-sm btn-primary">{{ action.label }}</button>
-                                            </form>
+                                        {% has_perm request.user action.permission as action_allowed %}
+                                        {% if action_allowed %}
+                                            {% if action.method == 'GET' %}
+                                                <a href="{% url url_namespace|add:model_name|add:'-'|add:action.name item.object.pk %}" class="btn btn-sm btn-primary">{{ action.label }}</a>
+                                            {% else %}
+                                                <form method="post" action="{% url url_namespace|add:model_name|add:'-'|add:action.name item.object.pk %}" style="display: inline;">
+                                                    {% csrf_token %}
+                                                    <button type="submit" class="btn btn-sm btn-primary">{{ action.label }}</button>
+                                                </form>
+                                            {% endif %}
                                         {% endif %}
                                     {% endfor %}
                                 </td>

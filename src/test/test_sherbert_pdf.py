@@ -8,8 +8,21 @@ from sherbert_pdf.models import (
     TextAnnotationData,
     StampAnnotationData,
     export_pdf,
+    _apply_erasures,
     _generate_cloud_points,
 )
+
+
+def _seed_pdf_file(document, tmp_path, name='source.pdf'):
+    """Write a one-page PDF under MEDIA_ROOT and point the document at it."""
+    pdf_dir = tmp_path / 'pdfs'
+    pdf_dir.mkdir(exist_ok=True)
+    src = pymupdf.open()
+    src.new_page(width=612, height=792)
+    src.save(pdf_dir / name)
+    src.close()
+    document.file.name = f'pdfs/{name}'
+    document.save()
 
 
 @pytest.fixture
@@ -216,6 +229,101 @@ def test_export_stamp_resolves_package_static_via_finders(document, settings, tm
     result = pymupdf.open(stream=pdf_bytes, filetype='pdf')
     page = result[0]
     assert page.get_images(), 'stamp image was not embedded into the exported page'
+    result.close()
+
+
+def test_apply_erasures_splits_stroke_through_circle():
+    # Horizontal stroke y=0 from x=0..100 through a circle at (50,0) r=10.
+    strokes = _apply_erasures([[(0, 0), (100, 0)]], [{'cx': 50, 'cy': 0, 'r': 10}])
+    assert len(strokes) == 2
+    left, right = strokes
+    # Left run ends where it enters the circle (~x=40), right run starts where
+    # it exits (~x=60); the gap straddles the erased circle.
+    assert left[0] == (0, 0)
+    assert abs(left[-1][0] - 40) < 1e-6
+    assert abs(right[0][0] - 60) < 1e-6
+    assert right[-1] == (100, 0)
+
+
+def test_apply_erasures_drops_fully_covered_stroke():
+    strokes = _apply_erasures([[(45, 0), (55, 0)]], [{'cx': 50, 'cy': 0, 'r': 100}])
+    assert strokes == []
+
+
+def test_apply_erasures_leaves_untouched_stroke():
+    strokes = _apply_erasures([[(0, 0), (100, 0)]], [{'cx': 50, 'cy': 500, 'r': 10}])
+    assert strokes == [[(0, 0), (100, 0)]]
+
+
+@pytest.mark.django_db
+def test_export_applies_erasures_to_pen_stroke(document, settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path
+    _seed_pdf_file(document, tmp_path)
+
+    # Straight 2-point stroke through one erasure circle.
+    _make_pen(
+        document, 'pen',
+        vertices=[[[0, 400], [100, 400]]],
+        erasures=[{'cx': 50, 'cy': 400, 'r': 10}],
+    )
+
+    pdf_bytes = export_pdf(document)
+    result = pymupdf.open(stream=pdf_bytes, filetype='pdf')
+    page = result[0]
+    ink_annots = [a for a in page.annots() if a.type[0] == pymupdf.PDF_ANNOT_INK]
+    assert len(ink_annots) == 1
+
+    strokes = ink_annots[0].vertices
+    # Exactly two disjoint sub-strokes with a gap covering the circle.
+    assert len(strokes) == 2
+    left, right = strokes
+    left_max_x = max(p[0] for p in left)
+    right_min_x = min(p[0] for p in right)
+    assert left_max_x < 50 < right_min_x
+    # The gap spans (roughly) the circle diameter.
+    assert (right_min_x - left_max_x) >= 15
+    result.close()
+
+
+@pytest.mark.django_db
+def test_export_drops_fully_erased_stroke(document, settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path
+    _seed_pdf_file(document, tmp_path)
+
+    _make_pen(
+        document, 'pen',
+        vertices=[[[45, 400], [55, 400]]],
+        erasures=[{'cx': 50, 'cy': 400, 'r': 100}],
+    )
+
+    pdf_bytes = export_pdf(document)
+    result = pymupdf.open(stream=pdf_bytes, filetype='pdf')
+    page = result[0]
+    ink_annots = [a for a in page.annots() if a.type[0] == pymupdf.PDF_ANNOT_INK]
+    assert ink_annots == []
+    result.close()
+
+
+@pytest.mark.django_db
+def test_export_stroke_without_erasure_touch_unchanged(document, settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path
+    _seed_pdf_file(document, tmp_path)
+
+    _make_pen(
+        document, 'pen',
+        vertices=[[[0, 400], [100, 400]]],
+        erasures=[{'cx': 50, 'cy': 700, 'r': 10}],  # far from the stroke
+    )
+
+    pdf_bytes = export_pdf(document)
+    result = pymupdf.open(stream=pdf_bytes, filetype='pdf')
+    page = result[0]
+    ink_annots = [a for a in page.annots() if a.type[0] == pymupdf.PDF_ANNOT_INK]
+    assert len(ink_annots) == 1
+    strokes = ink_annots[0].vertices
+    assert len(strokes) == 1
+    xs = [p[0] for p in strokes[0]]
+    assert min(xs) < 1 and max(xs) > 99  # endpoints preserved
     result.close()
 
 
