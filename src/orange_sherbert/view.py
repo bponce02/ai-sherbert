@@ -362,71 +362,50 @@ class _CRUDMixin:
         return kwargs
 
     def _apply_widget_styling_to_form(self, form):
+        """Apply the parent view's per-field ``field_widgets`` overrides.
+
+        Orange Sherbert has no global widget defaults: styling is the job of the
+        ``cotton/sherbert/field.html`` component (override it in your project).
+        ``field_widgets = {name: (widget_class_name, css_classes, extra_attrs)}``
+        remains as an explicit, per-field escape hatch to swap a widget class or
+        pin attributes from the view.
+        """
         from django import forms as django_forms
-        from django.conf import settings
-        from orange_sherbert.defaults import DEFAULT_FIELD_WIDGETS
         from orange_sherbert import widgets as orange_widgets
 
-        global_widgets = getattr(settings, 'ORANGE_SHERBERT_FIELD_WIDGETS', DEFAULT_FIELD_WIDGETS)
         view_widgets = getattr(self.parent_view, 'field_widgets', {}) if self.parent_view else {}
+        if not view_widgets:
+            return
 
-        for field_name, field in form.fields.items():
-            widget_config = None
+        for field_name, widget_config in view_widgets.items():
+            field = form.fields.get(field_name)
+            if field is None:
+                continue
+            widget_class_name, css_classes, extra_attrs = widget_config
 
-            if field_name in view_widgets:
-                widget_config = view_widgets[field_name]
+            widget_class = getattr(orange_widgets, widget_class_name, None)
+            if not widget_class:
+                widget_class = getattr(django_forms, widget_class_name, None)
+            if not widget_class and '.' in widget_class_name:
+                try:
+                    from importlib import import_module
+                    module_path, class_name = widget_class_name.rsplit('.', 1)
+                    widget_class = getattr(import_module(module_path), class_name, None)
+                except (ImportError, AttributeError, ValueError):
+                    pass
+            if not widget_class:
+                continue
+
+            attrs = {k: v for k, v in extra_attrs.items() if k != 'type'}
+            if not isinstance(field.widget, widget_class):
+                existing = {k: v for k, v in field.widget.attrs.items() if k != 'class'}
+                field.widget = widget_class(attrs={**existing, **attrs})
             else:
-                field_type = field.__class__.__name__
-                if field_type in global_widgets:
-                    widget_config = global_widgets[field_type]
-
-            if widget_config:
-                widget_class_name, css_classes, extra_attrs = widget_config
-
-                widget_class = getattr(orange_widgets, widget_class_name, None)
-                if not widget_class:
-                    widget_class = getattr(django_forms, widget_class_name, None)
-
-                if not widget_class and '.' in widget_class_name:
-                    try:
-                        from importlib import import_module
-                        module_path, class_name = widget_class_name.rsplit('.', 1)
-                        module = import_module(module_path)
-                        widget_class = getattr(module, class_name, None)
-                    except (ImportError, AttributeError, ValueError):
-                        pass
-
-                if widget_class:
-                    attrs = {'class': css_classes}
-                    attrs.update({k: v for k, v in extra_attrs.items() if k != 'type'})
-
-                    current_widget = field.widget.__class__.__name__
-                    current_widget_class = field.widget.__class__
-
-                    if current_widget_class == widget_class:
-                        existing_classes = field.widget.attrs.get('class', '')
-                        if existing_classes:
-                            existing_set = set(existing_classes.split())
-                            new_set = set(css_classes.split())
-                            combined = existing_set | new_set
-                            field.widget.attrs['class'] = ' '.join(sorted(combined))
-                        else:
-                            field.widget.attrs['class'] = css_classes
-                    elif current_widget in ('TextInput', 'Textarea', 'Select', 'SelectMultiple', 'NumberInput',
-                                         'DateInput', 'TimeInput', 'DateTimeInput', 'CheckboxInput'):
-                        if current_widget in ('Select', 'SelectMultiple', 'CheckboxInput'):
-                            field.widget.attrs.update(attrs)
-                        else:
-                            field.widget = widget_class(attrs=attrs)
-                    else:
-                        existing_classes = field.widget.attrs.get('class', '')
-                        if existing_classes:
-                            existing_set = set(existing_classes.split())
-                            new_set = set(css_classes.split())
-                            combined = existing_set | new_set
-                            field.widget.attrs['class'] = ' '.join(sorted(combined))
-                        else:
-                            field.widget.attrs['class'] = css_classes
+                field.widget.attrs.update(attrs)
+            if css_classes:
+                existing = field.widget.attrs.get('class', '')
+                merged = set(existing.split()) | set(css_classes.split())
+                field.widget.attrs['class'] = ' '.join(sorted(merged))
 
     def get_form(self, form_class=None):
         form = super().get_form(form_class)

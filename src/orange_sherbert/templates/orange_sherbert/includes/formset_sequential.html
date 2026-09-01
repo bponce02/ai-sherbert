@@ -14,12 +14,12 @@ Requires on formset:
 {% endcomment %}
 {% load sherbert_tags %}
 
-<div id="seq-{{ formset.prefix }}">
+<div id="seq-{{ formset.prefix }}" class="sherbert-formset sherbert-formset--sequential">
 
     {# ── Existing items list ───────────────────────────────────────── #}
     {% if formset.queryset.exists %}
-    <div class="overflow-x-auto mb-4">
-        <table class="table">
+    <div class="sherbert-table-wrap">
+        <table class="sherbert-table">
             <thead>
                 <tr>
                     {% for verbose_name, field_name in formset.sequential_display_fields %}
@@ -34,13 +34,13 @@ Requires on formset:
                     {% for verbose_name, field_name in formset.sequential_display_fields %}
                     <td>{{ item|get_attr:field_name }}</td>
                     {% endfor %}
-                    <td class="text-right">
+                    <td class="sherbert-row-actions">
                         <button type="button"
                             hx-post=""
                             hx-vals='{"formset_sequential_delete": "1", "formset_name": "{{ formset.prefix }}", "item_pk": "{{ item.pk }}"}'
                             hx-target="#seq-{{ formset.prefix }}"
                             hx-swap="outerHTML"
-                            class="btn btn-xs btn-ghost text-error">
+                            class="sherbert-btn sherbert-btn--ghost sherbert-btn--danger">
                             ✕
                         </button>
                     </td>
@@ -50,13 +50,10 @@ Requires on formset:
         </table>
     </div>
     {% else %}
-    <div class="flex flex-col items-center justify-center py-10 mb-4 bg-base-200 rounded-lg text-center">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 mb-3 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-        </svg>
-        <p class="text-base-content/60 text-sm">No {{ formset.verbose_name|lower }} yet.</p>
+    <div class="sherbert-empty">
+        <p>No {{ formset.verbose_name|lower }} yet.</p>
         {% if object and object.pk %}
-        <p class="text-base-content/40 text-xs mt-1">Add your first {{ formset.verbose_name_singular|lower }} using the form below.</p>
+        <p>Add your first {{ formset.verbose_name_singular|lower }} using the form below.</p>
         {% endif %}
     </div>
     {% endif %}
@@ -64,8 +61,8 @@ Requires on formset:
     {# ── Add form ──────────────────────────────────────────────────── #}
     {% if object and object.pk %}
     {% with form=formset.sequential_add_form %}
-    <div class="border border-base-300 rounded-lg p-4">
-        <h4 class="font-semibold mb-4">New {{ formset.verbose_name_singular }}</h4>
+    <div class="sherbert-formset-form">
+        <h4 class="sherbert-subtitle">New {{ formset.verbose_name_singular }}</h4>
         <form hx-post=""
               hx-target="#seq-{{ formset.prefix }}"
               hx-swap="outerHTML">
@@ -77,38 +74,18 @@ Requires on formset:
             <input type="hidden" name="{{ formset.prefix }}-MIN_NUM_FORMS" value="0">
             <input type="hidden" name="{{ formset.prefix }}-MAX_NUM_FORMS" value="1000">
 
-            <div class="grid grid-cols-2 gap-4">
+            <div class="sherbert-form-grid" style="--sherbert-form-cols: 2;">
                 {% for field in form %}
-                {% if not field.is_hidden %}
-                <div class="form-control {% if field.field.widget.attrs.rows %}col-span-2{% endif %}">
-                    <label class="label">
-                        <span class="label-text font-semibold">{{ field.label }}</span>
-                        {% if field.field.required %}<span class="label-text-alt text-error">*</span>{% endif %}
-                    </label>
-                    {{ field }}
-                    {% if field.errors %}
-                    <label class="label">
-                        <span class="label-text-alt text-error">{{ field.errors.0 }}</span>
-                    </label>
-                    {% endif %}
-                    {% if field.help_text %}
-                    <label class="label">
-                        <span class="label-text-alt">{{ field.help_text }}</span>
-                    </label>
-                    {% endif %}
-                </div>
-                {% else %}
-                {{ field }}
-                {% endif %}
+                <c-sherbert.field :field="field" />
                 {% endfor %}
             </div>
 
             {% if form.non_field_errors %}
-            <div class="alert alert-error mt-3 py-2 text-sm">{{ form.non_field_errors }}</div>
+            <div class="sherbert-errors">{{ form.non_field_errors }}</div>
             {% endif %}
 
-            <div class="flex justify-end mt-4">
-                <button type="submit" class="btn btn-primary btn-sm">
+            <div class="sherbert-actions">
+                <button type="submit" class="sherbert-btn sherbert-btn--primary">
                     + Add {{ formset.verbose_name_singular }}
                 </button>
             </div>
@@ -116,7 +93,7 @@ Requires on formset:
     </div>
     {% endwith %}
     {% else %}
-    <p class="text-sm text-base-content/50 italic">Save the record first to add {{ formset.verbose_name|lower }}.</p>
+    <p class="sherbert-empty">Save the record first to add {{ formset.verbose_name|lower }}.</p>
     {% endif %}
 
 </div>

@@ -3,17 +3,17 @@ Renders a formset and its children recursively.
 Usage: {% include "orange_sherbert/includes/formset.html" with formset=formset %}
 {% endcomment %}
 
-<div class="formset border border-base-300 rounded-lg p-4 mb-4">
+<div class="sherbert-formset">
     {{ formset.management_form }}
     {% for form in formset %}
         {% include "orange_sherbert/includes/form.html" with form=form %}
     {% empty %}
-    <p class="text-base-content/60 italic">No items yet.</p>
+    <p class="sherbert-empty">No items yet.</p>
     {% endfor %}
-    <button type="button" 
+    <button type="button"
         hx-post=""
         hx-swap="beforebegin"
         hx-vals='js:{formset_class: "{{ formset.model_name }}", prefix: "{{ formset.prefix }}", form_index: document.querySelector("#id_{{ formset.prefix }}-TOTAL_FORMS").value}'
         hx-on::after-request="document.querySelector('#id_{{ formset.prefix }}-TOTAL_FORMS').value++;"
-        class="btn btn-sm btn-outline btn-primary mt-2">+ Add</button>
+        class="sherbert-btn sherbert-btn--secondary sherbert-formset-add">+ Add</button>
 </div>

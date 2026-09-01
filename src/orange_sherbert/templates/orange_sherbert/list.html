@@ -4,137 +4,131 @@
 {% block title %}{{ verbose_name_plural }}{% endblock %}
 
 {% block content %}
-<div class="container mx-auto">
-    <div class="card">
-        <div class="card-body">
-            <h1 class="card-title">{{ verbose_name_plural }}</h1>
-            <div class="card-actions justify-end">
-                <a href="{% url url_namespace|add:model_name|add:'-create' %}?{{ request.GET.urlencode }}" class="btn btn-primary">Create New</a>
-            </div>
-            
-            <!-- Search Box -->
-            {% if search_fields %}
-            <div class="my-4">
-                <div class="flex gap-2">
-                    <input 
-                        type="search" 
-                        name="search" 
-                        id="search-input"
-                        value="{{ search_query }}" 
-                        placeholder="Search {{ verbose_name_plural|lower }}..." 
-                        class="input input-bordered flex-1"
-                        hx-get="." 
-                        hx-trigger="input changed delay:500ms, search" 
-                        hx-target="#results-table"
-                        hx-select="#results-table"
-                        hx-swap="outerHTML"
-                        hx-push-url="true"
-                        hx-include="#search-input, #filter-form select, #sort-by-input, #sort-dir-input"
-                    />
-                    {% if search_query %}
-                    <a href="?" class="btn btn-ghost">Clear</a>
-                    {% endif %}
-                </div>
-            </div>
+<div class="sherbert-page">
+    <div class="sherbert-card">
+        <h1 class="sherbert-title">{{ verbose_name_plural }}</h1>
+        <div class="sherbert-actions">
+            <a href="{% url url_namespace|add:model_name|add:'-create' %}?{{ request.GET.urlencode }}" class="sherbert-btn sherbert-btn--primary">Create New</a>
+        </div>
+
+        <!-- Search Box -->
+        {% if search_fields %}
+        <div class="sherbert-search">
+            <input
+                type="search"
+                name="search"
+                id="search-input"
+                value="{{ search_query }}"
+                placeholder="Search {{ verbose_name_plural|lower }}..."
+                class="sherbert-search-input"
+                hx-get="."
+                hx-trigger="input changed delay:500ms, search"
+                hx-target="#results-table"
+                hx-select="#results-table"
+                hx-swap="outerHTML"
+                hx-push-url="true"
+                hx-include="#search-input, #filter-form select, #sort-by-input, #sort-dir-input"
+            />
+            {% if search_query %}
+            <a href="?" class="sherbert-btn sherbert-btn--ghost">Clear</a>
             {% endif %}
-            
-            <!-- Filter Form -->
-            {% if filter_fields and object_list %}
-            <div class="flex flex-wrap gap-2 my-4 p-4 bg-base-200 rounded-lg" id="filter-form">
-                {% for field_name, field_label in filter_fields.items %}
-                    {% get_field_options object_list field_name as options %}
-                    <div class="form-control">
-                        <label class="label">
-                            <span class="label-text font-semibold">{{ field_label }}</span>
-                        </label>
-                        <select name="{{ field_name }}" class="select select-bordered select-sm w-full max-w-xs" 
-                        hx-get="." 
-                        hx-trigger="change" 
-                        hx-target="#results-table"
-                        hx-select="#results-table"
-                        hx-swap="outerHTML"
-                        hx-push-url="true"
-                        hx-include="#search-input, #filter-form select, #sort-by-input, #sort-dir-input">
-                            <option value="">All</option>
-                            {% for value, display in options %}
-                                <option value="{{ value }}" {% is_selected value request field_name %}>
-                                    {{ display }}
-                                </option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                {% endfor %}
-                
-                <div class="form-control self-end">
-                    <a href="?" class="btn btn-ghost btn-sm">Clear All</a>
+        </div>
+        {% endif %}
+
+        <!-- Filter Form -->
+        {% if filter_fields and object_list %}
+        <div class="sherbert-filters" id="filter-form">
+            {% for field_name, field_label in filter_fields.items %}
+                {% get_field_options object_list field_name as options %}
+                <div class="sherbert-field sherbert-filter">
+                    <label class="sherbert-label">{{ field_label }}</label>
+                    <select name="{{ field_name }}" class="sherbert-filter-select"
+                    hx-get="."
+                    hx-trigger="change"
+                    hx-target="#results-table"
+                    hx-select="#results-table"
+                    hx-swap="outerHTML"
+                    hx-push-url="true"
+                    hx-include="#search-input, #filter-form select, #sort-by-input, #sort-dir-input">
+                        <option value="">All</option>
+                        {% for value, display in options %}
+                            <option value="{{ value }}" {% is_selected value request field_name %}>
+                                {{ display }}
+                            </option>
+                        {% endfor %}
+                    </select>
                 </div>
+            {% endfor %}
+
+            <div class="sherbert-filter sherbert-filter--clear">
+                <a href="?" class="sherbert-btn sherbert-btn--ghost">Clear All</a>
             </div>
-            {% endif %}
-            
-            <div class="overflow-x-auto" id="results-table">
-                <input type="hidden" name="sort_by" id="sort-by-input" value="{{ request.GET.sort_by }}" />
-                <input type="hidden" name="sort_dir" id="sort-dir-input" value="{{ request.GET.sort_dir }}" />
-                <table class="table w-full">
-                    <thead>
+        </div>
+        {% endif %}
+
+        <div class="sherbert-table-wrap" id="results-table">
+            <input type="hidden" name="sort_by" id="sort-by-input" value="{{ request.GET.sort_by }}" />
+            <input type="hidden" name="sort_dir" id="sort-dir-input" value="{{ request.GET.sort_dir }}" />
+            <table class="sherbert-table">
+                <thead>
+                    <tr>
+                        {% for field_name, field_label in fields.items %}
+                            {% with col_width=field_widths|get_item:field_name %}
+                            <th{% if col_width %} style="width: {{ col_width }}%"{% endif %}>
+                                <button type="button"
+                                hx-get="."
+                                hx-vals='{"sort_by": "{{ field_name }}", "sort_dir": "{% if request.GET.sort_by == field_name and request.GET.sort_dir == "asc" %}desc{% else %}asc{% endif %}"}'
+                                hx-target="#results-table"
+                                hx-select="#results-table"
+                                hx-swap="outerHTML"
+                                hx-push-url="true"
+                                hx-include="#search-input, #filter-form select, #sort-by-input, #sort-dir-input"
+                                class="sherbert-sort">
+                                    {{ field_label }}
+                                    {% if request.GET.sort_by == field_name %}
+                                        {% if request.GET.sort_dir == 'desc' %}↓{% else %}↑{% endif %}
+                                    {% endif %}
+                                </button>
+                            </th>
+                            {% endwith %}
+                        {% endfor %}
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="search-results">
+                    {% for item in object_data %}
                         <tr>
-                            {% for field_name, field_label in fields.items %}
-                                {% with col_width=field_widths|get_item:field_name %}
-                                <th{% if col_width %} style="width: {{ col_width }}%"{% endif %}>
-                                    <button type="button"
-                                    hx-get="."
-                                    hx-vals='{"sort_by": "{{ field_name }}", "sort_dir": "{% if request.GET.sort_by == field_name and request.GET.sort_dir == "asc" %}desc{% else %}asc{% endif %}"}'
-                                    hx-target="#results-table"
-                                    hx-select="#results-table"
-                                    hx-swap="outerHTML"
-                                    hx-push-url="true"
-                                    hx-include="#search-input, #filter-form select, #sort-by-input, #sort-dir-input"
-                                    class="flex items-center gap-1 cursor-pointer hover:text-primary btn btn-ghost btn-sm normal-case">
-                                        {{ field_label }}
-                                        {% if request.GET.sort_by == field_name %}
-                                            {% if request.GET.sort_dir == 'desc' %}↓{% else %}↑{% endif %}
-                                        {% endif %}
-                                    </button>
-                                </th>
+                            {% for field_name, verbose_name, value in item.fields %}
+                                {% with col_width=field_widths|get_item:field_name cell_class=cell_css|get_item:field_name %}
+                                <td{% if cell_class %} class="{{ cell_class }}"{% endif %}{% if col_width %} style="width: {{ col_width }}%"{% endif %}>{{ value }}</td>
                                 {% endwith %}
                             {% endfor %}
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="search-results">
-                        {% for item in object_data %}
-                            <tr>
-                                {% for field_name, verbose_name, value in item.fields %}
-                                    {% with col_width=field_widths|get_item:field_name cell_class=cell_css|get_item:field_name %}
-                                    <td{% if cell_class %} class="{{ cell_class }}"{% endif %}{% if col_width %} style="width: {{ col_width }}%"{% endif %}>{{ value }}</td>
-                                    {% endwith %}
-                                {% endfor %}
-                                <td class="min-w-40 max-w-40">
-                                    <a href="{% url url_namespace|add:model_name|add:'-detail' item.object.pk %}?{{ request.GET.urlencode }}" class="btn btn-sm btn-ghost">View</a>
-                                    <a href="{% url url_namespace|add:model_name|add:'-update' item.object.pk %}?{{ request.GET.urlencode }}" class="btn btn-sm btn-ghost">Edit</a>
-                                    <a href="{% url url_namespace|add:model_name|add:'-delete' item.object.pk %}?{{ request.GET.urlencode }}" class="btn btn-sm btn-ghost">Delete</a>
-                                    {% for action in extra_actions %}
-                                        {% has_perm request.user action.permission as action_allowed %}
-                                        {% if action_allowed %}
-                                            {% if action.method == 'GET' %}
-                                                <a href="{% url url_namespace|add:model_name|add:'-'|add:action.name item.object.pk %}" class="btn btn-sm btn-primary">{{ action.label }}</a>
-                                            {% else %}
-                                                <form method="post" action="{% url url_namespace|add:model_name|add:'-'|add:action.name item.object.pk %}" style="display: inline;">
-                                                    {% csrf_token %}
-                                                    <button type="submit" class="btn btn-sm btn-primary">{{ action.label }}</button>
-                                                </form>
-                                            {% endif %}
+                            <td class="sherbert-row-actions">
+                                <a href="{% url url_namespace|add:model_name|add:'-detail' item.object.pk %}?{{ request.GET.urlencode }}" class="sherbert-btn sherbert-btn--ghost">View</a>
+                                <a href="{% url url_namespace|add:model_name|add:'-update' item.object.pk %}?{{ request.GET.urlencode }}" class="sherbert-btn sherbert-btn--ghost">Edit</a>
+                                <a href="{% url url_namespace|add:model_name|add:'-delete' item.object.pk %}?{{ request.GET.urlencode }}" class="sherbert-btn sherbert-btn--ghost">Delete</a>
+                                {% for action in extra_actions %}
+                                    {% has_perm request.user action.permission as action_allowed %}
+                                    {% if action_allowed %}
+                                        {% if action.method == 'GET' %}
+                                            <a href="{% url url_namespace|add:model_name|add:'-'|add:action.name item.object.pk %}" class="sherbert-btn sherbert-btn--primary">{{ action.label }}</a>
+                                        {% else %}
+                                            <form method="post" action="{% url url_namespace|add:model_name|add:'-'|add:action.name item.object.pk %}" style="display: inline;">
+                                                {% csrf_token %}
+                                                <button type="submit" class="sherbert-btn sherbert-btn--primary">{{ action.label }}</button>
+                                            </form>
                                         {% endif %}
-                                    {% endfor %}
-                                </td>
-                            </tr>
-                        {% empty %}
-                            <tr>
-                                <td colspan="10" class="text-center">No items found.</td>
-                            </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
+                                    {% endif %}
+                                {% endfor %}
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr>
+                            <td colspan="10" class="sherbert-empty">No items found.</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
         </div>
     </div>
 </div>

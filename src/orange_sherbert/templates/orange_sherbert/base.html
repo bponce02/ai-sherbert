@@ -1,16 +1,17 @@
- {% load django_htmx %}
+{% load django_htmx %}
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}{% endblock %}</title>
-    <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css" />
-    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     {% htmx_script %}
     <style>
-        /* form_layout grid — plain CSS (not Tailwind classes) so host
-           Tailwind builds can't purge a dynamically-numbered grid-cols-N */
+        /* Orange Sherbert ships no CSS framework. The only styling here is the
+           structural form_layout grid — plain CSS so host builds can't purge a
+           dynamically-numbered grid-cols-N. Override this template (or the
+           individual page templates / the sherbert.field cotton component)
+           to apply your own. */
         .sherbert-form-grid {
             display: grid;
             gap: 1rem;
@@ -22,6 +23,7 @@
             }
         }
     </style>
+    {% block extra_head %}{% endblock %}
 </head>
 <body hx-headers='{"x-csrftoken": "{{ csrf_token }}"}'>
     {% block content %}{% endblock %}

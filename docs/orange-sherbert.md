@@ -11,8 +11,10 @@ from orange_sherbert.view import CRUDView
 ```
 
 - No models, no migrations, no settings are required for the base feature set.
-- Requires `django_htmx` in `INSTALLED_APPS` and its middleware (see README).
-- Templates use Tailwind + DaisyUI.
+- Requires `django_htmx` (+ middleware) and the `django_cotton` template loader
+  in the host project (see README).
+- Templates are CSS-framework agnostic; see
+  [Field rendering and styling](#field-rendering-and-styling).
 
 ## Contents
 
@@ -32,7 +34,7 @@ from orange_sherbert.view import CRUDView
 - [Template overrides](#template-overrides)
 - [Side cards / top cards](#side-cards--top-cards)
 - [Parent-view hooks](#parent-view-hooks)
-- [`field_widgets` and `ORANGE_SHERBERT_FIELD_WIDGETS`](#field-widgets-and-orange_sherbert_field_widgets)
+- [Field rendering and styling](#field-rendering-and-styling)
 - [List page behaviors](#list-page-behaviors)
 - [Template tags](#template-tags)
 
@@ -475,12 +477,14 @@ class BookCRUDView(CRUDView):
     list_template_name = "myapp/book_list.html"
 ```
 
-The bundled templates extend `orange_sherbert/base.html`, which loads Tailwind
-+ DaisyUI from a CDN and sets `hx-headers` with the CSRF token. Reusable
-includes live in `orange_sherbert/templates/orange_sherbert/includes/`
-(`form.html`, `form_field.html`, `formset.html`, `formset_sequential.html`).
-If you override the base or page templates, you must provide Tailwind + DaisyUI
-yourself.
+The bundled templates extend `orange_sherbert/base.html`, which loads HTMX,
+sets `hx-headers` with the CSRF token, and defines the `.sherbert-form-grid`
+layout CSS — nothing else. Reusable includes live in
+`orange_sherbert/templates/orange_sherbert/includes/` (`form.html`,
+`formset.html`, `formset_sequential.html`); individual fields come from the
+`<c-sherbert.field>` cotton component. All markup uses semantic `sherbert-*`
+classes, so override any template (or just the field component) to apply your
+CSS framework — see [Field rendering and styling](#field-rendering-and-styling).
 
 ## Side cards / top cards
 
@@ -549,76 +553,92 @@ Notes:
 - The whole save (object + non-sequential formsets + `post_save`) runs inside a
   single `transaction.atomic()`.
 
-## `field_widgets` and `ORANGE_SHERBERT_FIELD_WIDGETS`
+## Field rendering and styling
 
-Form widgets are styled automatically. Resolution order per form field
-(`_apply_widget_styling_to_form`):
+Orange Sherbert is **CSS-framework agnostic** and ships **no widget defaults**.
+Every form field on the create/update pages, inline formset rows, and sequential
+formsets is rendered by one django-cotton component:
 
-1. **Per-view `field_widgets`** — if the field name is a key here, its config
-   wins.
-2. **Global `ORANGE_SHERBERT_FIELD_WIDGETS`** (or `DEFAULT_FIELD_WIDGETS` if the
-   setting is unset) — matched by the **form field's class name** (e.g.
-   `CharField`, `DateField`, `ModelChoiceField`).
+```html
+<c-sherbert.field :field="form.title" label="Title" size="sm" compact class="col-span-2" />
+```
 
-Each config is a **3-tuple**: `(widget_class_name, css_classes, extra_attrs)`.
+The packaged default (`orange_sherbert/templates/cotton/sherbert/field.html`)
+emits plain markup with semantic hooks only:
 
-- `widget_class_name` (str) is resolved in this order: an attribute of
-  `orange_sherbert.widgets` (custom `DateInput`/`TimeInput`/`DateTimeInput` that
-  set the HTML5 input type), then an attribute of `django.forms`, then a dotted
-  import path.
-- `css_classes` (str) becomes the widget's `class`. When a widget already has
-  classes, the new classes are **merged** (union) rather than replacing.
-- `extra_attrs` (dict) is applied as widget attributes (a `type` key is ignored).
+```html
+<div class="sherbert-field sherbert-field--text [sherbert-field--error] [class]">
+    <label class="sherbert-label" for="…">Title<span class="sherbert-required">*</span></label>
+    <input …>                                   {# {{ field }} #}
+    <span class="sherbert-error">…</span>        {# first error, if any #}
+    <span class="sherbert-help">…</span>         {# help_text, if any #}
+</div>
+```
 
-**Per-view override:**
+Attributes: `field` (BoundField, required), `label` (override text), `size` and
+`compact` (hints your override may use), `class` (extra wrapper classes). Hidden
+fields render bare; checkbox widgets render inside the label. The wrapper also
+carries `sherbert-field--<widget_type>` (`select`, `textarea`, `checkbox`, `date`, …
+— Django's `BoundField.widget_type`).
+
+**To style it**, copy the component into your project — Django's filesystem
+loader wins over the packaged one:
+
+```
+templates/cotton/sherbert/field.html
+```
+
+`django-widget-tweaks` is a dependency, so inside your override you can add
+classes at render time without touching Python forms:
+
+```html
+{% load widget_tweaks %}
+<c-vars label="" size="" compact="" class="" />
+<div class="form-control {{ class }}">
+    <label class="label" for="{{ field.id_for_label }}">{{ label|default:field.label }}</label>
+    {% if field.widget_type == 'select' %}
+        {% render_field field class+="select w-full" %}
+    {% elif field.widget_type == 'checkbox' %}
+        {% render_field field class+="checkbox" %}
+    {% else %}
+        {% render_field field class+="input w-full" %}
+    {% endif %}
+    {% if field.errors %}<span class="text-error">{{ field.errors.0 }}</span>{% endif %}
+</div>
+```
+
+Because the same component is used by the packaged page templates *and* is
+available to your own hand-written forms, one file defines how a field looks
+across the whole project. Widgets keep any classes they already carry (e.g. a
+JavaScript hook class set in `Meta.widgets`) — `class+=` appends.
+
+The page templates (`orange_sherbert/list.html`, `create.html`, `update.html`,
+`detail.html`, `delete.html`, `includes/*.html`) use the same approach: semantic
+`sherbert-*` classes (`sherbert-card`, `sherbert-btn sherbert-btn--primary`,
+`sherbert-table`, `sherbert-errors`, `sherbert-formset`, …). Override any of
+them under `templates/orange_sherbert/` to restyle.
+
+### Per-view `field_widgets` (widget escape hatch)
+
+The only Python-side hook. Use it to swap a field's widget class or pin
+attributes for one view; it is *not* needed for styling.
 
 ```python
 class BookCRUDView(CRUDView):
     model = Book
     field_widgets = {
-        "isbn": ("TextInput", "input input-bordered w-full font-mono", {"maxlength": "13"}),
+        # field name: (widget_class_name, css_classes, extra_attrs)
+        "isbn": ("TextInput", "", {"maxlength": "13"}),
+        "pub_date": ("DateInput", "", {}),   # orange_sherbert.widgets.DateInput → type="date"
     }
 ```
 
-**Global override** in `settings.py` — keys are **form-field class names**:
-
-```python
-ORANGE_SHERBERT_FIELD_WIDGETS = {
-    "DateField":   ("DateInput", "input input-bordered w-full", {}),
-    "CharField":   ("TextInput", "input input-bordered w-full", {}),
-    "DecimalField":("NumberInput", "input input-bordered w-full", {"step": "0.01"}),
-    "TextField":   ("Textarea", "textarea textarea-bordered w-full", {"rows": "4"}),
-    "BooleanField":("CheckboxInput", "checkbox", {}),
-    # ... override only the ones you want; supply the whole dict.
-}
-```
-
-`DEFAULT_FIELD_WIDGETS` (the fallback, from `orange_sherbert/defaults.py`) — the
-exact built-in mapping:
-
-| Form field class | Widget class | CSS classes | Extra attrs |
-|---|---|---|---|
-| `DateField` | `DateInput` | `input input-bordered w-full` | `{}` |
-| `TimeField` | `TimeInput` | `input input-bordered w-full` | `{}` |
-| `DateTimeField` | `DateTimeInput` | `input input-bordered w-full` | `{}` |
-| `CharField` | `TextInput` | `input input-bordered w-full` | `{}` |
-| `EmailField` | `EmailInput` | `input input-bordered w-full` | `{}` |
-| `URLField` | `URLInput` | `input input-bordered w-full` | `{}` |
-| `IntegerField` | `NumberInput` | `input input-bordered w-full` | `{}` |
-| `DecimalField` | `NumberInput` | `input input-bordered w-full` | `{'step': '0.01'}` |
-| `FloatField` | `NumberInput` | `input input-bordered w-full` | `{'step': 'any'}` |
-| `TextField` | `Textarea` | `textarea textarea-bordered w-full` | `{'rows': '4'}` |
-| `BooleanField` | `CheckboxInput` | `checkbox` | `{}` |
-| `ChoiceField` | `Select` | `select select-bordered w-full` | `{}` |
-| `TypedChoiceField` | `Select` | `select select-bordered w-full` | `{}` |
-| `ModelChoiceField` | `Select` | `select select-bordered w-full` | `{}` |
-| `ModelMultipleChoiceField` | `SelectMultiple` | `select select-bordered w-full` | `{'multiple': True}` |
-| `FileField` | `FileInput` | `file-input file-input-bordered w-full` | `{}` |
-| `ImageField` | `FileInput` | `file-input file-input-bordered w-full` | `{'accept': 'image/*'}` |
-
-> Setting `ORANGE_SHERBERT_FIELD_WIDGETS` **replaces** the default dict entirely
-> (there is no per-key merge with `DEFAULT_FIELD_WIDGETS`). Include every field
-> type you want styled. The example above matches CoreCRM's real setting.
+- `widget_class_name` is resolved as an attribute of `orange_sherbert.widgets`
+  (HTML5 `DateInput` / `TimeInput` / `DateTimeInput`), then `django.forms`, then a
+  dotted import path.
+- `css_classes` is merged (union) into the widget's existing `class` — leave it
+  `""` and let the component style the field.
+- `extra_attrs` is applied as widget attributes (a `type` key is ignored).
 
 ## List page behaviors
 

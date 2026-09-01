@@ -1,24 +1,14 @@
-<div class="formset-form border border-base-200 rounded p-3 mb-3 bg-base-50">
+{% comment %}
+One form inside an inline formset, plus any nested child formsets.
+Fields render through the overridable sherbert.field cotton component.
+{% endcomment %}
+<div class="sherbert-formset-form">
     {% for field in form %}
-        {% if not field.is_hidden %}
-        <div class="form-control mb-2">
-            <label class="label">
-                <span class="label-text font-semibold">{{ field.label }}</span>
-            </label>
-            {{ field }}
-            {% if field.errors %}
-                <label class="label">
-                    <span class="label-text-alt text-error">{{ field.errors.0 }}</span>
-                </label>
-            {% endif %}
-        </div>
-        {% else %}
-            {{ field }}
-        {% endif %}
+        <c-sherbert.field :field="field" />
     {% endfor %}
-    
+
     {% for child_formset in form.children %}
-        <div class="nested-formset ml-6 border-l-2 border-primary/30 pl-4 mt-3">
+        <div class="sherbert-formset-nested">
             {% include "orange_sherbert/includes/formset.html" with formset=child_formset %}
         </div>
     {% endfor %}

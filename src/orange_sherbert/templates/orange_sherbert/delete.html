@@ -3,19 +3,17 @@
 {% block title %}Delete {{ object }}{% endblock %}
 
 {% block content %}
-<div class="container mx-auto">
-    <div class="card">
-        <div class="card-body">
-            <h1 class="mb-6">Are you sure you want to delete "<strong>{{ object }}</strong>"?</p>
-            
-            <form method="post">
-                {% csrf_token %}
-                <div class="card-actions justify-end gap-2">
-                    <a href="{% url url_namespace|add:model_name|add:'-list' %}?{{ list_query_params }}" class="btn btn-ghost">Cancel</a>
-                    <button type="submit" class="btn btn-error">Delete</button>
-                </div>
-            </form>
-        </div>
+<div class="sherbert-page">
+    <div class="sherbert-card">
+        <h1 class="sherbert-title">Are you sure you want to delete "<strong>{{ object }}</strong>"?</h1>
+
+        <form method="post">
+            {% csrf_token %}
+            <div class="sherbert-actions">
+                <a href="{% url url_namespace|add:model_name|add:'-list' %}?{{ list_query_params }}" class="sherbert-btn sherbert-btn--ghost">Cancel</a>
+                <button type="submit" class="sherbert-btn sherbert-btn--danger">Delete</button>
+            </div>
+        </form>
     </div>
 </div>
 {% endblock %}

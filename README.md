@@ -2,7 +2,7 @@
 
 Two reusable Django apps shipped in one wheel:
 
-- **`orange_sherbert`** — declarative CRUD views. Subclass `CRUDView`, set a few class attributes, call `get_urls()`, and you get list/detail/create/update/delete pages with search, filtering, column sorting, HTMX-powered inline formsets (including a "sequential" one-at-a-time mode), multi-column form layouts, per-field widget styling, and per-field/per-view permission gating. Templates are Tailwind + DaisyUI.
+- **`orange_sherbert`** — declarative CRUD views. Subclass `CRUDView`, set a few class attributes, call `get_urls()`, and you get list/detail/create/update/delete pages with search, filtering, column sorting, HTMX-powered inline formsets (including a "sequential" one-at-a-time mode), multi-column form layouts, and per-field/per-view permission gating. Templates are CSS-framework agnostic: unstyled markup with semantic `sherbert-*` hooks, and every form field renders through an overridable `<c-sherbert.field>` django-cotton component.
 - **`sherbert_pdf`** — a PDF annotation backend plus a self-contained Konva.js editor. Store pen / highlighter / text / stamp / revision-cloud annotations against uploaded PDFs, expose them through a mountable Django-Ninja router, and export a flattened annotated PDF via PyMuPDF. Optional; installed with the `pdf` extra.
 
 The two apps are independent — you can install and use either alone.
@@ -43,13 +43,15 @@ The distribution installs **two** top-level importable packages: `orange_sherber
 
 ### `orange_sherbert`
 
-`INSTALLED_APPS` and the django-htmx middleware are both required. The inline-formset add/save/delete flows POST via HTMX and rely on `request.htmx` set by `django_htmx.middleware.HtmxMiddleware`:
+`INSTALLED_APPS`, the django-htmx middleware, and the django-cotton template loader are all required. The inline-formset add/save/delete flows POST via HTMX and rely on `request.htmx` set by `django_htmx.middleware.HtmxMiddleware`; form fields render through the `<c-sherbert.field>` cotton component:
 
 ```python
 INSTALLED_APPS = [
     # ...
     "django.contrib.staticfiles",
     "django_htmx",
+    "django_cotton.apps.SimpleAppConfig",
+    "widget_tweaks",                     # for {% render_field %} in your overrides
     "orange_sherbert",
     # your apps
 ]
@@ -58,11 +60,26 @@ MIDDLEWARE = [
     # ...
     "django_htmx.middleware.HtmxMiddleware",   # REQUIRED for orange_sherbert
 ]
+
+TEMPLATES = [{
+    "BACKEND": "django.template.backends.django.DjangoTemplates",
+    "DIRS": [BASE_DIR / "templates"],
+    "APP_DIRS": False,                   # cotton's loader wraps the standard ones
+    "OPTIONS": {
+        "loaders": [
+            "django_cotton.cotton_loader.Loader",
+            "django.template.loaders.filesystem.Loader",
+            "django.template.loaders.app_directories.Loader",
+        ],
+        "builtins": ["django_cotton.templatetags.cotton"],
+        # ... context_processors
+    },
+}]
 ```
 
 `orange_sherbert` has **no models and no migrations** — it is views + templates + template tags only.
 
-**Templates require Tailwind CSS and DaisyUI at render time.** The bundled base template (`orange_sherbert/base.html`) pulls both from a CDN, so the default pages work out of the box; if you override templates, supply Tailwind + DaisyUI yourself. See [`docs/orange-sherbert.md` → Template overrides](docs/orange-sherbert.md#template-overrides).
+**Templates ship no CSS framework.** Every page uses plain markup with semantic `sherbert-*` classes, and each form field is rendered by `<c-sherbert.field>` (`orange_sherbert/templates/cotton/sherbert/field.html`). To style with Tailwind, DaisyUI, Bootstrap, or anything else, copy that one component into your project at `templates/cotton/sherbert/field.html` and apply your classes (django-widget-tweaks is installed for `{% render_field field class+="..." %}`); override the page templates the same way. See [`docs/orange-sherbert.md` → Field rendering and styling](docs/orange-sherbert.md#field-rendering-and-styling).
 
 ### `sherbert_pdf`
 
@@ -148,7 +165,6 @@ See [`docs/sherbert-pdf.md`](docs/sherbert-pdf.md) for the full endpoint list, a
 
 | Setting | App | Default | Purpose |
 |---|---|---|---|
-| `ORANGE_SHERBERT_FIELD_WIDGETS` | orange_sherbert | `DEFAULT_FIELD_WIDGETS` (see [docs](docs/orange-sherbert.md#field-widgets-and-orange_sherbert_field_widgets)) | Map Django form-field types → `(widget_class_name, css_classes, extra_attrs)`. |
 | `SHERBERT_PDF_ACCESS_POLICY` | sherbert_pdf | `None` → built-in owner-only `AccessPolicy` | Dotted path to an `AccessPolicy` subclass. |
 | `SHERBERT_PDF_API_BASE` | sherbert_pdf | `"/api"` | URL prefix the editor uses to reach the mounted router. |
 | `SHERBERT_PDF_STAMPS` | sherbert_pdf | two packaged demo stamps | List of `{"label", "url"}` stamp definitions for the editor palette. |
