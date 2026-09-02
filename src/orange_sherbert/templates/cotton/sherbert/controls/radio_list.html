@@ -1,0 +1,19 @@
+{% comment %}
+radio_list control: one radio per choice, emitted by hand because Django puts widget
+attrs on the wrapper <div>, not on the option inputs. Classes: classes["choice_list"]
+(container), classes["choice_label"], classes["choice_text"], classes["radio"],
+classes["radio_<size>"].
+{% endcomment %}
+<c-vars classes="" control_class="" size="" itype="" />
+{% load sherbert_tags %}
+{% sherbert_variant classes "radio" size as size_class %}
+<div class="sherbert-choice-list{% if classes.choice_list %} {{ classes.choice_list }}{% endif %}">
+    {% for choice in field %}
+    <label class="sherbert-choice{% if classes.choice_label %} {{ classes.choice_label }}{% endif %}" for="{{ choice.id_for_label }}">
+        <input type="radio" name="{{ choice.data.name }}" value="{{ choice.data.value|stringformat:'s' }}" id="{{ choice.id_for_label }}"
+               class="sherbert-radio{% if classes.radio %} {{ classes.radio }}{% endif %}{% if size_class %} {{ size_class }}{% endif %}{% if control_class %} {{ control_class }}{% endif %}"
+               {% if choice.data.selected %}checked{% endif %}{% if field.field.required %} required{% endif %}>
+        <span class="sherbert-choice-text{% if classes.choice_text %} {{ classes.choice_text }}{% endif %}">{{ choice.choice_label }}</span>
+    </label>
+    {% endfor %}
+</div>

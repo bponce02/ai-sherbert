@@ -1,31 +1,13 @@
 {% comment %}
-Usage (angle brackets omitted so cotton doesn't compile this comment):
-  c-sherbert.field :field="form.title" label="Title" size="sm" compact class="extra wrapper classes"
+Themeless default for <c-sherbert.field>. Projects shadow THIS file at
+templates/cotton/sherbert/field.html and pass a `classes` dict (and optional
+`kinds` aliases) through to <c-sherbert.field_base>; the dispatcher and the
+per-widget controls stay upstream. Example:
 
-Renders one bound form field: label, widget, first error, help text. Hidden
-fields render bare. This is the unstyled default — only semantic `sherbert-*`
-hooks — so it works with any CSS framework. To style it, copy this file to
-`templates/cotton/sherbert/field.html` in your project and apply your classes
-(django-widget-tweaks is installed: `{% load widget_tweaks %}` then
-`{% render_field field class+="..." %}`).
-
-Attributes:
-  field    BoundField (required)
-  label    override label text (defaults to field.label)
-  size     size hint for your override ("xs", "sm", "lg"); unused here
-  compact  dense-layout hint for your override; unused here
-  class    extra classes on the wrapper
+  c-vars label="" size="" compact="" class="" control_class=""
+  c-sherbert.field_base :field="field" :label="label" :size="size" :compact="compact"
+      class="{{ class }}" :control_class="control_class"
+      :classes="{'wrapper': 'form-control', 'input': 'input w-full', ...}"
 {% endcomment %}
-<c-vars label="" size="" compact="" class="" />
-{% if field.is_hidden %}
-{{ field }}
-{% else %}
-<div class="sherbert-field sherbert-field--{{ field.widget_type }}{% if field.errors %} sherbert-field--error{% endif %}{% if class %} {{ class }}{% endif %}">
-    <label class="sherbert-label" for="{{ field.id_for_label }}">
-        {% if field.widget_type == 'checkbox' %}{{ field }} {% endif %}{{ label|default:field.label }}{% if field.field.required %}<span class="sherbert-required">*</span>{% endif %}
-    </label>
-    {% if field.widget_type != 'checkbox' %}{{ field }}{% endif %}
-    {% if field.errors %}<span class="sherbert-error">{{ field.errors.0 }}</span>{% endif %}
-    {% if field.help_text %}<span class="sherbert-help">{{ field.help_text }}</span>{% endif %}
-</div>
-{% endif %}
+<c-vars label="" size="" compact="" class="" control_class="" />
+<c-sherbert.field_base :field="field" :label="label" :size="size" :compact="compact" class="{{ class }}" :control_class="control_class" />

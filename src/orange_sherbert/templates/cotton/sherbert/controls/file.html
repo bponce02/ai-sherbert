@@ -1,0 +1,10 @@
+{% comment %}file control for <c-sherbert.field>. Classes: classes["file"], classes["file_<size>"], classes["file_error"].{% endcomment %}
+<c-vars classes="" control_class="" size="" itype="" />
+{% load widget_tweaks sherbert_tags %}
+{% sherbert_variant classes "file" size as size_class %}
+{% sherbert_variant classes "file" field.errors|yesno:"error," as error_class %}
+{% with theme_class=classes|cls:"file" type_attr="type:"|add:itype %}
+{% with widget=field|add_class:"sherbert-file"|add_class:theme_class|add_class:size_class|add_class:error_class|add_class:control_class %}
+{% if itype %}{{ widget|attr:type_attr }}{% else %}{{ widget }}{% endif %}
+{% endwith %}
+{% endwith %}

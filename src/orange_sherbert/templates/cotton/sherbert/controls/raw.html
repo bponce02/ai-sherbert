@@ -1,0 +1,8 @@
+{% comment %}
+Fallback control: widgets that mount their own UI (rich-text editors, JS
+pickers…). Rendered untouched unless the theme dict has a key named after the
+widget type (e.g. classes["proseeditor"]) or control_class is given.
+{% endcomment %}
+<c-vars classes="" control_class="" size="" itype="" />
+{% load widget_tweaks sherbert_tags %}
+{% with extra=classes|cls:field.widget_type %}{% if extra or control_class %}{{ field|add_class:extra|add_class:control_class }}{% else %}{{ field }}{% endif %}{% endwith %}

@@ -1,0 +1,50 @@
+{% comment %}
+The form-field dispatcher. Renders wrapper, label, the control matching the
+field's widget type, first error and help text. Do NOT shadow this file in a
+project — shadow `cotton/sherbert/field.html` (a thin wrapper around this) and
+pass a `classes` dict to theme it. See docs/orange-sherbert.md.
+
+Attributes:
+  field          BoundField (required)
+  label          override label text (defaults to field.label)
+  size           size hint, e.g. "sm" -> adds classes["<kind>_sm"]
+  compact        dense-layout hint -> uses classes["label_compact"] / ["label_text_compact"]
+                 when set, and hides the required marker
+  class          extra classes on the wrapper
+  control_class  extra classes on the widget element itself
+  classes        theme dict: wrapper, label, label_text, required, error, help,
+                 input, select, textarea, file, checkbox, radio, raw,
+                 choice_list, choice_label, choice_text,
+                 <kind>_error, <kind>_<size>, plus any custom widget type key
+  kinds          alias dict: widget_type -> control name ({'tomselect': 'select'})
+
+Controls live in cotton/sherbert/controls/<kind>.html and receive
+field, classes, control_class, size, itype.
+{% endcomment %}
+<c-vars label="" size="" compact="" class="" control_class="" classes="" kinds="" />
+{% load sherbert_tags %}
+{% if field.is_hidden %}
+{{ field }}
+{% else %}
+{% sherbert_kind field kinds as kind %}
+{% sherbert_itype field as itype %}
+<div class="sherbert-field sherbert-field--{{ kind }}{% if field.errors %} sherbert-field--error{% endif %}{% if classes.wrapper %} {{ classes.wrapper }}{% endif %}{% if class %} {{ class }}{% endif %}">
+    {% if kind == 'checkbox' %}
+    <label class="sherbert-label sherbert-label--checkbox{% if classes.checkbox_label %} {{ classes.checkbox_label }}{% endif %}" for="{{ field.id_for_label }}">
+        <c-component is="sherbert.controls.checkbox" :field="field" :classes="classes" :control_class="control_class" :size="size" />
+        <span class="sherbert-label-text{% if compact and classes.label_text_compact %} {{ classes.label_text_compact }}{% elif classes.label_text %} {{ classes.label_text }}{% endif %}">{{ label|default:field.label }}</span>
+    </label>
+    {% else %}
+    <label class="sherbert-label{% if compact and classes.label_compact %} {{ classes.label_compact }}{% elif classes.label %} {{ classes.label }}{% endif %}" for="{{ field.id_for_label }}">
+        <span class="sherbert-label-text{% if compact and classes.label_text_compact %} {{ classes.label_text_compact }}{% elif classes.label_text %} {{ classes.label_text }}{% endif %}">{{ label|default:field.label }}{% if field.field.required and not compact %}<span class="sherbert-required{% if classes.required %} {{ classes.required }}{% endif %}">*</span>{% endif %}</span>
+    </label>
+    <c-component is="sherbert.controls.{{ kind }}" :field="field" :classes="classes" :control_class="control_class" :size="size" :itype="itype" />
+    {% endif %}
+    {% if field.errors %}
+    <div class="sherbert-error{% if classes.error %} {{ classes.error }}{% endif %}">{{ field.errors.0 }}</div>
+    {% endif %}
+    {% if field.help_text %}
+    <div class="sherbert-help{% if classes.help %} {{ classes.help }}{% endif %}">{{ field.help_text }}</div>
+    {% endif %}
+</div>
+{% endif %}

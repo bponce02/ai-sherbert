@@ -1,0 +1,7 @@
+{% comment %}Single checkbox control. Rendered inside the label by field_base. Classes: classes["checkbox"], classes["checkbox_<size>"].{% endcomment %}
+<c-vars classes="" control_class="" size="" itype="" />
+{% load widget_tweaks sherbert_tags %}
+{% sherbert_variant classes "checkbox" size as size_class %}
+{% with theme_class=classes|cls:"checkbox" %}
+{{ field|add_class:"sherbert-checkbox"|add_class:theme_class|add_class:size_class|add_class:control_class }}
+{% endwith %}
