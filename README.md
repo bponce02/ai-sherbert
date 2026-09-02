@@ -79,7 +79,7 @@ TEMPLATES = [{
 
 `orange_sherbert` has **no models and no migrations** — it is views + templates + template tags only.
 
-**Templates ship no CSS framework.** Every page uses plain markup with semantic `sherbert-*` classes, and each form field is rendered by `<c-sherbert.field>` (`orange_sherbert/templates/cotton/sherbert/field.html`). To style with Tailwind, DaisyUI, Bootstrap, or anything else, copy that one component into your project at `templates/cotton/sherbert/field.html` and apply your classes (django-widget-tweaks is installed for `{% render_field field class+="..." %}`); override the page templates the same way. See [`docs/orange-sherbert.md` → Field rendering and styling](docs/orange-sherbert.md#field-rendering-and-styling).
+**Templates ship no CSS framework.** Every page uses plain markup with semantic `sherbert-*` classes, and each form field is rendered by `<c-sherbert.field>`, a thin wrapper around the `<c-sherbert.field_base>` dispatcher and its per-widget controls (`cotton/sherbert/controls/*`). To style with Tailwind, DaisyUI, Bootstrap, or anything else, shadow only `templates/cotton/sherbert/field.html` in your project and pass a `classes` dict (`{'input': 'input w-full', 'select': 'select w-full', …}`) through to `field_base`; widget handling, HTML5 date types, radio/checkbox lists and the raw fallback for third-party widgets stay upstream. Custom widgets get a `classes` key, a `kinds` alias, or their own `controls/<widget_type>.html`. See [`docs/orange-sherbert.md` → Field rendering and styling](docs/orange-sherbert.md#field-rendering-and-styling).
 
 ### `sherbert_pdf`
 

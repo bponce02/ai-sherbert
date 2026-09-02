@@ -560,57 +560,92 @@ Every form field on the create/update pages, inline formset rows, and sequential
 formsets is rendered by one django-cotton component:
 
 ```html
-<c-sherbert.field :field="form.title" label="Title" size="sm" compact class="col-span-2" />
+<c-sherbert.field :field="form.title" label="Title" size="sm" compact class="col-span-2" control_class="text-right" />
 ```
 
-The packaged default (`orange_sherbert/templates/cotton/sherbert/field.html`)
-emits plain markup with semantic hooks only:
+| Attribute | Meaning |
+|---|---|
+| `field` | BoundField (required). |
+| `label` | Override the label text (defaults to `field.label`). |
+| `size` | Size hint (`xs`, `sm`, `lg`, …) → adds `classes["<kind>_<size>"]`. |
+| `compact` | Dense-layout hint → uses `classes["label_compact"]` / `["label_text_compact"]` and hides the required marker. |
+| `class` | Extra classes on the wrapper. |
+| `control_class` | Extra classes on the widget element itself. |
+
+The component is split in two layers:
+
+- **`<c-sherbert.field_base>`** — the dispatcher (`cotton/sherbert/field_base.html`).
+  It renders wrapper, label, the control for the field's widget type, first error
+  and help text. Hidden fields render bare; single checkboxes render inside the
+  label. **Do not shadow this file.**
+- **Controls** — one file per widget family in `cotton/sherbert/controls/`:
+  `input`, `select`, `textarea`, `file`, `checkbox`, `radio_list`,
+  `checkbox_list`, `raw`. Date/time/datetime widgets go through `input` with
+  their HTML5 `type` forced. Radio and checkbox lists emit one styled input per
+  option (Django would otherwise put widget attrs on the wrapper `<div>`).
+  Anything the dispatcher does not recognise (rich-text editors, JS pickers…)
+  falls back to `raw`, which renders the widget untouched.
+- **`<c-sherbert.field>`** — a thin themeless wrapper around `field_base`
+  (`cotton/sherbert/field.html`). **This is the only file a project shadows.**
+
+The packaged default emits semantic hooks only: the wrapper carries
+`sherbert-field sherbert-field--<kind>` (plus `sherbert-field--error`), the
+label `sherbert-label` / `sherbert-label-text`, controls `sherbert-input`,
+`sherbert-select`, …, errors `sherbert-error`, help `sherbert-help`.
+
+### Theming: shadow `field.html`, pass a `classes` dict
+
+Copy nothing. Create `templates/cotton/sherbert/field.html` in your project
+(Django's filesystem loader wins over the packaged one) and forward the
+attributes to `field_base` together with your class names:
 
 ```html
-<div class="sherbert-field sherbert-field--text [sherbert-field--error] [class]">
-    <label class="sherbert-label" for="…">Title<span class="sherbert-required">*</span></label>
-    <input …>                                   {# {{ field }} #}
-    <span class="sherbert-error">…</span>        {# first error, if any #}
-    <span class="sherbert-help">…</span>         {# help_text, if any #}
-</div>
+<c-vars label="" size="" compact="" class="" control_class="" />
+<c-sherbert.field_base
+    :field="field" :label="label" :size="size" :compact="compact"
+    class="{{ class }}" :control_class="control_class"
+    :classes="{
+        'wrapper': 'form-control',
+        'label': 'label', 'label_text': 'label-text font-semibold',
+        'required': 'text-error ml-1',
+        'error': 'label-text-alt text-error', 'help': 'label-text-alt',
+        'input': 'input w-full', 'input_sm': 'input-sm', 'input_error': 'input-error',
+        'select': 'select w-full', 'select_error': 'select-error',
+        'textarea': 'textarea w-full',
+        'file': 'file-input w-full',
+        'checkbox': 'checkbox', 'radio': 'radio radio-sm',
+        'choice_list': 'space-y-2', 'choice_label': 'label cursor-pointer gap-3', 'choice_text': 'label-text',
+    }" />
 ```
 
-Attributes: `field` (BoundField, required), `label` (override text), `size` and
-`compact` (hints your override may use), `class` (extra wrapper classes). Hidden
-fields render bare; checkbox widgets render inside the label. The wrapper also
-carries `sherbert-field--<widget_type>` (`select`, `textarea`, `checkbox`, `date`, …
-— Django's `BoundField.widget_type`).
+Recognised keys: `wrapper`, `label`, `label_compact`, `label_text`,
+`label_text_compact`, `checkbox_label`, `required`, `error`, `help`; one per
+control (`input`, `select`, `textarea`, `file`, `checkbox`, `radio`); size and
+error variants (`<control>_<size>`, `<control>_error`); `choice_list`,
+`choice_label`, `choice_text` for radio/checkbox lists. Missing keys are simply
+skipped, so start small.
 
-**To style it**, copy the component into your project — Django's filesystem
-loader wins over the packaged one:
+Widgets keep any attrs they already carry — `x-model`, `placeholder`, a JS hook
+class set in `Meta.widgets` — because classes are appended with
+django-widget-tweaks' `add_class`. Python forms therefore need **no CSS at all**.
 
-```
-templates/cotton/sherbert/field.html
-```
+### Custom widgets
 
-`django-widget-tweaks` is a dependency, so inside your override you can add
-classes at render time without touching Python forms:
+Three options, in increasing order of effort:
 
-```html
-{% load widget_tweaks %}
-<c-vars label="" size="" compact="" class="" />
-<div class="form-control {{ class }}">
-    <label class="label" for="{{ field.id_for_label }}">{{ label|default:field.label }}</label>
-    {% if field.widget_type == 'select' %}
-        {% render_field field class+="select w-full" %}
-    {% elif field.widget_type == 'checkbox' %}
-        {% render_field field class+="checkbox" %}
-    {% else %}
-        {% render_field field class+="input w-full" %}
-    {% endif %}
-    {% if field.errors %}<span class="text-error">{{ field.errors.0 }}</span>{% endif %}
-</div>
-```
+1. **Style only.** Add a `classes` key named after the widget type
+   (`BoundField.widget_type`: the widget class name lower-cased with `Widget`/`Input`
+   stripped — `ProseEditorWidget` → `proseeditor`). The `raw` control applies it.
+2. **Reuse a built-in control.** Pass `kinds` to alias the widget type:
+   `:kinds="{'tomselect': 'select'}"` routes it through `controls/select.html`
+   with the select classes, size and error variants for free.
+3. **Custom markup.** Drop `templates/cotton/sherbert/controls/<widget_type>.html`
+   in your project. The dispatcher picks it up by name; it receives `field`,
+   `classes`, `control_class`, `size`, `itype` like the built-ins.
 
-Because the same component is used by the packaged page templates *and* is
-available to your own hand-written forms, one file defines how a field looks
-across the whole project. Widgets keep any classes they already carry (e.g. a
-JavaScript hook class set in `Meta.widgets`) — `class+=` appends.
+Resolution order in `{% sherbert_kind %}`: `kinds` alias → a control template
+named after the widget type → built-in widget types → any widget with an
+`input_type` (→ `input`) → `raw`.
 
 The page templates (`orange_sherbert/list.html`, `create.html`, `update.html`,
 `detail.html`, `delete.html`, `includes/*.html`) use the same approach: semantic
@@ -670,4 +705,8 @@ Load with `{% load sherbert_tags %}`. Available in
 | `is_selected` (tag) | `{% is_selected option request field %}` | `'selected'` if `str(option) == request.GET[field]`, else `''`. |
 | `get_verbose_name` (tag) | `{% get_verbose_name object 'author' %}` | The field's `verbose_name`; falls back to a title-cased field name if the field doesn't exist. |
 | `has_perm` (tag) | `{% has_perm user action.permission as allowed %}` | `user.has_perm(permission)`; a falsy/empty permission returns `True` (no restriction). Used to gate `extra_actions` buttons. |
+| `sherbert_kind` (tag) | `{% sherbert_kind field kinds as kind %}` | Control name (`input`, `select`, …, `raw`) for a BoundField; see [Custom widgets](#custom-widgets) for the resolution order. Used by `field_base`. |
+| `sherbert_itype` (tag) | `{% sherbert_itype field as itype %}` | `date` / `time` / `datetime-local` for date-family widgets, else `''`. |
+| `sherbert_variant` (tag) | `{% sherbert_variant classes "input" size as cls %}` | `classes["input_<size>"]` or `''`; also used for `<kind>_error`. |
+| `cls` (filter) | `{{ classes|cls:"input" }}` | Theme class string for a key, `''` when unset (safe to chain into `add_class`). |
 </content>
